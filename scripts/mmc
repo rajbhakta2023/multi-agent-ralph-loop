@@ -72,7 +72,9 @@ setup() {
     echo -e "${BLUE}MiniMax Configuration${NC}"
     echo ""
 
-    read -p "Enter your MiniMax API key: " API_KEY
+    # ISSUE-004: Hide API key input with -s flag
+    read -s -p "Enter your MiniMax API key: " API_KEY
+    echo ""  # New line after hidden input
 
     if [ -z "$API_KEY" ]; then
         echo -e "${RED}Error: API key cannot be empty${NC}"

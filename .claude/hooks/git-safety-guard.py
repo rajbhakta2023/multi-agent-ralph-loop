@@ -156,8 +156,8 @@ BLOCKED_PATTERNS = [
     (r"rm\s+(-rf|-fr|--recursive)\s+(?!/tmp/)(?!/var/tmp/)(?!\$TMPDIR)",
      "recursive deletion outside temp directories - verify path first"),
 
-    # Rebase on shared branches
-    (r"git\s+rebase\s+.*\s+(main|master|develop)\b",
+    # Rebase on shared branches (ISSUE-011: removed extra \s+ before branch name)
+    (r"git\s+rebase\s+.*(main|master|develop)\b",
      "rebasing shared branches can cause issues for collaborators"),
 ]
 
