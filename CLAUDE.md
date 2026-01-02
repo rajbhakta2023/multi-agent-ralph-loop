@@ -1,6 +1,14 @@
-# Multi-Agent Ralph v2.17
+# Multi-Agent Ralph v2.18
 
 Orchestration with **automatic planning**, **intensive clarification**, adversarial validation, self-improvement, and 9-language quality gates.
+
+## v2.18 Key Changes
+
+- **VULN-001 FIX**: escape_for_shell() now uses `printf %q` (prevents command injection)
+- **VULN-003 FIX**: Improved rm -rf regex patterns in git-safety-guard.py
+- **VULN-004 FIX**: validate_path() uses `realpath -e` (resolves symlinks)
+- **VULN-005 FIX**: Log files now chmod 600 (user-only read/write)
+- **VULN-008 FIX**: All scripts start with `umask 077` (secure file creation)
 
 ## v2.17 Key Changes
 

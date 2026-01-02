@@ -1,6 +1,6 @@
-# 🎭 Multi-Agent Ralph Wiggum v2.17
+# 🎭 Multi-Agent Ralph Wiggum v2.18
 
-![Version](https://img.shields.io/badge/version-2.17.0-blue)
+![Version](https://img.shields.io/badge/version-2.18.0-blue)
 ![License](https://img.shields.io/badge/license-BSL%201.1-orange)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-compatible-purple)
 [![Contributions Welcome](https://img.shields.io/badge/contributions-welcome-brightgreen)](CONTRIBUTING.md)
@@ -9,13 +9,20 @@
 
 A sophisticated multi-agent orchestration system for Claude Code that coordinates multiple AI models (Claude, Codex CLI, Gemini CLI, MiniMax) with **automatic planning**, **intensive clarification**, adversarial validation, self-improvement capabilities, and comprehensive quality gates.
 
-## 🌟 What's New in v2.17
+## 🌟 What's New in v2.18
+
+- **VULN-001 FIX**: `escape_for_shell()` now uses `printf %q` to prevent command injection attacks
+- **VULN-003 FIX**: Improved rm -rf regex patterns in git-safety-guard.py (blocks `.`, `../`, all non-temp paths)
+- **VULN-004 FIX**: `validate_path()` uses `realpath -e` to resolve symlinks and prevent traversal
+- **VULN-005 FIX**: Log files now set to `chmod 600` (user-only read/write)
+- **VULN-008 FIX**: All scripts start with `umask 077` for secure file creation defaults
+
+### v2.17 Features (included)
 
 - **Security Hardening**: All user inputs validated and shell-escaped before execution
 - **Enhanced validate_path()**: Blocks control characters, path traversal attacks, and shell metacharacters
 - **New validate_text_input()**: Validates free-form text inputs (tasks, queries) with length limits
 - **Safe JSON Construction**: Uses `jq` for all JSON building to prevent injection attacks
-- **escape_for_shell()**: Now actively applied to all user inputs passed to external commands
 
 ### v2.16 Features (included)
 

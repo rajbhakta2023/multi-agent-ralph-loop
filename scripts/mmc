@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # mmc - MiniMax Claude Code Wrapper
+# Version 2.18.0
 # Runs Claude Code with MiniMax M2.1 backend (~8% cost)
+# v2.18: Security fixes (VULN-005, VULN-008), improved log file permissions
 # Based on: https://blog.devgenius.io/claude-code-but-cheaper-and-snappy-minimax-m2-1-with-a-tiny-wrapper-7d910db93383
 
 set -euo pipefail
 
-VERSION="2.17.0"
+# SECURITY: Ensure all created files are user-only by default (VULN-008)
+umask 077
+
+VERSION="2.18.0"
 CONFIG_FILE="${HOME}/.ralph/config/minimax.json"
 RALPH_DIR="${HOME}/.ralph"
 
@@ -18,7 +23,7 @@ NC='\033[0m'
 
 show_help() {
     cat << 'EOF'
-mmc - MiniMax Claude Code Wrapper v2.17.0
+mmc - MiniMax Claude Code Wrapper v2.18.0
 
 Run Claude Code with MiniMax M2.1 backend (~8% of Claude's cost).
 
@@ -180,6 +185,8 @@ log_usage() {
     local GLOBAL_LOG="${RALPH_DIR}/logs/usage.jsonl"
     mkdir -p "$(dirname "$GLOBAL_LOG")"
     echo "$LOG_ENTRY" >> "$GLOBAL_LOG"
+    # VULN-005 FIX: Ensure log file is only readable by owner
+    chmod 600 "$GLOBAL_LOG" 2>/dev/null || true
 
     # 2. PROJECT LOG: .ralph/usage.jsonl (per-repo tracking)
     if [ -n "$PROJECT" ]; then
@@ -189,6 +196,8 @@ log_usage() {
             local PROJECT_LOG="${PROJECT_ROOT}/.ralph/usage.jsonl"
             mkdir -p "$(dirname "$PROJECT_LOG")"
             echo "$LOG_ENTRY" >> "$PROJECT_LOG"
+            # VULN-005 FIX: Ensure log file is only readable by owner
+            chmod 600 "$PROJECT_LOG" 2>/dev/null || true
         fi
     fi
 }
@@ -327,7 +336,7 @@ cmd_stats() {
     fi
 
     echo "═══════════════════════════════════════════════════════════════"
-    echo "              MINIMAX USAGE STATISTICS (v2.17)"
+    echo "              MINIMAX USAGE STATISTICS (v2.18)"
     echo "═══════════════════════════════════════════════════════════════"
     echo ""
 

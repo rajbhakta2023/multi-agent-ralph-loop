@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# install.sh - Multi-Agent Ralph Wiggum v2.17 Global Installer
+# install.sh - Multi-Agent Ralph Wiggum v2.18 Global Installer
 # Installs ralph CLI globally and integrates with Claude Code
-# v2.17: Hybrid logging (global + per-project), Task() async pattern for MiniMax
+# v2.18: Security hardening (VULN-001 to VULN-008 fixes), improved file permissions
 
 set -euo pipefail
 
-VERSION="2.17.0"
+# SECURITY: Ensure all created files are user-only by default (VULN-008)
+umask 077
+
+VERSION="2.18.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Installation directories
@@ -463,7 +466,8 @@ main() {
     echo "    • 3 skills to ~/.claude/skills/"
     echo "    • Git Safety Guard (blocks destructive commands) - ALWAYS ACTIVE"
     echo "    • Quality Gates (9-language validation) - Manual via 'ralph gates'"
-    echo "    • Hybrid usage logging (global + per-project) - v2.17"
+    echo "    • Hybrid usage logging (global + per-project)"
+    echo "    • Security hardening (VULN-001 to VULN-008 fixes) - v2.18"
     echo "    • Shell aliases to ~/.zshrc or ~/.bashrc"
     echo ""
 

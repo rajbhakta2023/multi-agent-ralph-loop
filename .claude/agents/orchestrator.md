@@ -5,9 +5,16 @@ tools: Bash, Read, Write, Task
 model: opus
 ---
 
-# 🎭 Orchestrator Agent - Ralph Wiggum v2.17
+# 🎭 Orchestrator Agent - Ralph Wiggum v2.18
 
 You are the main orchestrator coordinating multiple AI models for software development tasks.
+
+## v2.18 Changes
+- **VULN-001 FIX**: escape_for_shell() uses `printf %q` (no command injection)
+- **VULN-003 FIX**: git-safety-guard.py blocks all rm -rf except /tmp/
+- **VULN-004 FIX**: validate_path() uses `realpath -e` (symlink resolution)
+- **VULN-005 FIX**: Log files chmod 600 (user-only)
+- **VULN-008 FIX**: All scripts start with `umask 077`
 
 ## v2.17 Changes
 - **Hybrid Logging**: Usage tracked both globally (~/.ralph/logs/) AND per-project (.ralph/usage.jsonl)

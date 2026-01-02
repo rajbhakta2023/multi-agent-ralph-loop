@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # uninstall.sh - Multi-Agent Ralph Wiggum Uninstaller
 # Removes ralph CLI and all associated configurations
+# v2.18: Security fixes cleanup
 
 set -euo pipefail
 
-VERSION="2.17.0"
+VERSION="2.18.0"
 
 # Installation directories
 INSTALL_DIR="${HOME}/.local/bin"

@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # ralph - Multi-Agent Orchestrator CLI
-# Version 2.17.0
+# Version 2.18.0
+# v2.18: Security fixes (VULN-001, VULN-004, VULN-008), improved validation
 set -euo pipefail
 
-VERSION="2.17.0"
+# SECURITY: Ensure all created files are user-only by default (VULN-008)
+umask 077
+
+VERSION="2.18.0"
 RALPH_DIR="${HOME}/.ralph"
 
 # SECURITY: Use mktemp for unpredictable temp directory
@@ -17,9 +21,10 @@ init_tmpdir() {
 }
 
 # SECURITY: Validate file path input (prevent command injection)
-# v2.17: Enhanced with control character and path traversal blocking
+# v2.18: VULN-004 FIX - Use realpath -e to resolve symlinks, improved validation
 validate_path() {
     local path="$1"
+    local check_exists="${2:-check}"
 
     # Block control characters (newlines, carriage returns, null bytes, etc.)
     if [[ "$path" =~ [[:cntrl:]] ]]; then
@@ -39,14 +44,23 @@ validate_path() {
         exit 1
     fi
 
-    # Ensure path exists (if checking existing file/dir)
-    if [ "${2:-check}" = "check" ] && [ ! -e "$path" ]; then
-        log_error "Path does not exist: $path"
-        exit 1
-    fi
+    # VULN-004 FIX: Use realpath -e to resolve symlinks and validate existence
+    if [ "$check_exists" = "check" ]; then
+        local canonical_path
+        # -e flag: resolve all symlinks, path must exist
+        canonical_path=$(realpath -e "$path" 2>/dev/null)
 
-    # Return canonicalized path when possible
-    realpath -s "$path" 2>/dev/null || printf '%s' "$path"
+        if [ -z "$canonical_path" ]; then
+            log_error "Path does not exist or contains invalid symlinks: $path"
+            exit 1
+        fi
+
+        # Return the fully resolved canonical path
+        printf '%s' "$canonical_path"
+    else
+        # For paths that don't need to exist yet, use -s (logical) but warn
+        realpath -s "$path" 2>/dev/null || printf '%s' "$path"
+    fi
 }
 
 # SECURITY: Validate text input (for non-path user inputs like TASK, QUERY)
@@ -70,10 +84,11 @@ validate_text_input() {
     printf '%s' "$input"
 }
 
-# SECURITY: Escape string for safe shell usage
-# v2.17: Now actively used for all user inputs in commands
+# SECURITY: Escape string for safe shell usage (VULN-001 FIX)
+# v2.18: Use printf %q for proper escaping (prevents command substitution)
 escape_for_shell() {
-    printf '%s' "$1" | sed "s/'/'\\\\''/g; s/^/'/; s/\$/'/"
+    # printf %q properly escapes all special characters including $() and ``
+    printf '%q' "$1"
 }
 IMPROVEMENTS_DIR="${RALPH_DIR}/improvements"
 CONFIG_DIR="${RALPH_DIR}/config"
@@ -114,7 +129,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 # ===============================================================================
 show_help() {
     cat << 'EOF'
-ralph - Multi-Agent Orchestrator CLI v2.17.0
+ralph - Multi-Agent Orchestrator CLI v2.18.0
 
 ORCHESTRATION:
   ralph orch "task"          Full orchestration (clarify->classify->execute->validate->retrospective)
@@ -770,11 +785,11 @@ cmd_orch() {
 
     echo ""
     echo "==============================================================="
-    echo "  RALPH WIGGUM v2.17 ORCHESTRATION"
+    echo "  RALPH WIGGUM v2.18 ORCHESTRATION"
     echo "==============================================================="
     echo ""
-    echo "  NOTE: v2.17 uses AskUserQuestion for interactive clarification"
-    echo "        and EnterPlanMode for automatic planning."
+    echo "  NOTE: v2.18 includes security fixes and improved validation."
+    echo "        Uses AskUserQuestion and EnterPlanMode."
     echo ""
     echo "  For best experience, use the Claude Code /orchestrator command"
     echo "  which provides native interactive questioning."

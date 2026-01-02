@@ -152,9 +152,20 @@ BLOCKED_PATTERNS = [
     (r"git\s+stash\s+clear",
      "permanently deletes ALL stashed changes"),
 
-    # Recursive delete outside temp directories
-    (r"rm\s+(-rf|-fr|--recursive)\s+(?!/tmp/)(?!/var/tmp/)(?!\$TMPDIR)",
-     "recursive deletion outside temp directories - verify path first"),
+    # VULN-003 FIX: Improved rm -rf protection patterns
+    # Block ALL recursive deletes except explicitly allowed temp dirs
+    (r"rm\s+(-rf|-fr|--recursive)\s+(?!(/tmp/|/var/tmp/|\$TMPDIR/|/private/tmp/))\S",
+     "recursive deletion not in safe temp directory"),
+
+    # Block deletion of current directory (extremely dangerous)
+    (r"rm\s+(-rf|-fr|--recursive)\s+\.\s*$",
+     "deletion of current directory is destructive"),
+    (r"rm\s+(-rf|-fr|--recursive)\s+\.$",
+     "deletion of current directory is destructive"),
+
+    # Block relative path deletion with ../
+    (r"rm\s+(-rf|-fr|--recursive)\s+\.\./",
+     "relative path deletion with ../ is unsafe"),
 
     # Rebase on shared branches (ISSUE-011: removed extra \s+ before branch name)
     (r"git\s+rebase\s+.*(main|master|develop)\b",
