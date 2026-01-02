@@ -1,8 +1,9 @@
 # 🎭 Multi-Agent Ralph Wiggum v2.16
 
 ![Version](https://img.shields.io/badge/version-2.16.0-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
+![License](https://img.shields.io/badge/license-BSL%201.1-orange)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-compatible-purple)
+[![Contributions Welcome](https://img.shields.io/badge/contributions-welcome-brightgreen)](CONTRIBUTING.md)
 
 > "Me fail English? That's unpossible!" - Ralph Wiggum
 
@@ -398,9 +399,25 @@ This project was inspired by and builds upon the work of these amazing contribut
 - **MiniMax Wrapper**: [@jpcaparas](https://twitter.com/jpcaparas) - [DevGenius Article](https://blog.devgenius.io/claude-code-but-cheaper-and-snappy-minimax-m2-1-with-a-tiny-wrapper-7d910db93383)
 - **Anthropic Official Plugins**: [anthropics/claude-code-plugins](https://github.com/anthropics/claude-code-plugins)
 
+## 🤝 Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+**Ways to contribute:**
+- Report bugs and suggest features via [Issues](https://github.com/alfredolopez/multi-agent-ralph-loop/issues)
+- Propose new agents using the [Agent Proposal template](.github/ISSUE_TEMPLATE/new_agent.md)
+- Submit pull requests for improvements
+- Share your use cases and feedback
+
 ## 📄 License
 
-MIT License - See LICENSE file for details.
+**Business Source License 1.1 (BSL 1.1)**
+
+- **Free for**: Non-commercial use, educational use, personal use, internal business use
+- **Restricted**: Commercial offerings that compete with this project
+- **Change Date**: January 1, 2030 - converts to Apache 2.0
+
+See [LICENSE](LICENSE) file for full details.
 
 ---
 
