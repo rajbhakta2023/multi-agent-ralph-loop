@@ -1,0 +1,738 @@
+#!/usr/bin/env bash
+# ralph - Multi-Agent Orchestrator CLI
+# Version 2.12.0
+set -euo pipefail
+
+VERSION="2.12.0"
+TMPDIR="${TMPDIR:-/tmp}/ralph-$$"
+RALPH_DIR="${HOME}/.ralph"
+IMPROVEMENTS_DIR="${RALPH_DIR}/improvements"
+CONFIG_DIR="${RALPH_DIR}/config"
+HOOKS_DIR="${HOME}/.claude/hooks"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+NC='\033[0m'
+
+# Iteration Limits
+CLAUDE_MAX_ITER=15
+MINIMAX_MAX_ITER=30
+LIGHTNING_MAX_ITER=60
+
+# Cleanup
+cleanup() { rm -rf "$TMPDIR" 2>/dev/null || true; }
+trap cleanup EXIT
+
+ensure_tmp() { mkdir -p "$TMPDIR"; }
+ensure_dirs() { mkdir -p "$IMPROVEMENTS_DIR/backups" "$CONFIG_DIR"; }
+
+log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+log_success() { echo -e "${GREEN}[OK]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HELP
+# ═══════════════════════════════════════════════════════════════════════════════
+show_help() {
+    cat << 'EOF'
+🎭 ralph - Multi-Agent Orchestrator CLI v2.12.0
+
+ORCHESTRATION:
+  ralph orch "task"          Full orchestration (clarify→classify→execute→validate→retrospective)
+  ralph loop "task"          Loop until VERIFIED_DONE (max 15 iter Claude, 30 MiniMax)
+  ralph clarify "task"       Generate clarification questions
+
+REVIEW (6 SUBAGENTS):
+  ralph review <path>        Multi-model review
+  ralph parallel <path>      All 6 subagents in parallel
+  ralph full-review <path>   Alias for parallel
+
+SPECIALIZED:
+  ralph security <path>      Security audit (Codex + MiniMax)
+  ralph bugs <path>          Bug hunting (Codex)
+  ralph unit-tests <path>    Unit tests (Codex, 90% coverage)
+  ralph integration <path>   Integration tests (Gemini)
+  ralph refactor <path>      Refactoring (Codex)
+  ralph research "query"     Web research (Gemini)
+  ralph minimax "query"      Second opinion (MiniMax ~8% cost)
+
+VALIDATION:
+  ralph gates                Quality gates (9 languages) - BLOCKING
+  ralph gates --check        Quality gates (non-blocking check only)
+  ralph adversarial <path>   2/3 consensus (Claude + Codex + Gemini)
+
+SELF-IMPROVEMENT:
+  ralph retrospective        Analyze last task, propose improvements
+  ralph retro                Alias for retrospective
+  ralph improvements         List pending improvements
+  ralph improvements apply   Apply pending improvements
+  ralph improvements reject  Reject improvements
+
+UTILITY:
+  ralph status               Show active processes
+  ralph version              Show version
+  ralph help                 Show this help
+  ralph --uninstall          Uninstall ralph and all components
+
+ITERATION LIMITS:
+  Claude (Sonnet/Opus): 15 iterations
+  MiniMax M2.1:         30 iterations (2x)
+  MiniMax-lightning:    60 iterations (4x)
+
+ALIASES (add to ~/.zshrc or ~/.bashrc):
+  alias rh='ralph'
+  alias rho='ralph orch'
+  alias rhr='ralph review'
+  alias rhp='ralph parallel'
+  alias rhs='ralph security'
+  alias rhb='ralph bugs'
+  alias rhu='ralph unit-tests'
+  alias rhf='ralph refactor'
+  alias rhres='ralph research'
+  alias rhm='ralph minimax'
+  alias rhg='ralph gates'
+  alias rha='ralph adversarial'
+  alias rhl='ralph loop'
+  alias rhc='ralph clarify'
+  alias rhret='ralph retrospective'
+  alias rhi='ralph improvements'
+
+EXAMPLES:
+  ralph orch "Implement OAuth2 with Google"
+  ralph security src/auth/
+  ralph parallel src/ --async
+  ralph adversarial src/payments/
+  ralph loop "Fix all TypeScript errors"
+  ralph retrospective
+EOF
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CODEX SUBAGENTS
+# ═══════════════════════════════════════════════════════════════════════════════
+run_codex_security() {
+    local FILES="$1"
+    local OUTPUT="$TMPDIR/codex_security.json"
+
+    codex exec --yolo --enable-skills -m gpt-5.2-codex \
+        "Use security-review skill. Analyze for vulnerabilities in: $FILES
+
+         Output JSON: {vulnerabilities: [{severity, type, file, line, description, fix}], summary: {critical, high, medium, low, approved}}" \
+        > "$OUTPUT" 2>&1 &
+    echo $!
+}
+
+run_codex_bugs() {
+    local FILES="$1"
+    local OUTPUT="$TMPDIR/codex_bugs.json"
+
+    codex exec --yolo --enable-skills -m gpt-5.2-codex \
+        "Use bug-hunter skill. Find bugs in: $FILES
+
+         Output JSON: {bugs: [{severity, type, file, line, description, fix}], summary: {total, high, medium, low, approved}}" \
+        > "$OUTPUT" 2>&1 &
+    echo $!
+}
+
+run_codex_unit_tests() {
+    local FILES="$1"
+    local OUTPUT="$TMPDIR/codex_tests.json"
+
+    codex exec --yolo --enable-skills -m gpt-5.2-codex \
+        "Use test-generation skill. Generate unit tests for: $FILES
+         Target: 90% coverage. Include edge cases and error paths.
+
+         Output JSON: {tests: [{file, content, coverage, type}], summary: {total_tests, estimated_coverage}}" \
+        > "$OUTPUT" 2>&1 &
+    echo $!
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# GEMINI SUBAGENTS
+# ═══════════════════════════════════════════════════════════════════════════════
+run_gemini_integration() {
+    local FILES="$1"
+    local OUTPUT="$TMPDIR/gemini_integration.txt"
+
+    gemini "Generate comprehensive integration tests for: $FILES
+            Include: API tests, database tests, external service mocks.
+            Output ready-to-run test files." \
+        --yolo -o text > "$OUTPUT" 2>&1 &
+    echo $!
+}
+
+run_gemini_research() {
+    local QUERY="$1"
+    local OUTPUT="$TMPDIR/gemini_research.txt"
+
+    gemini "$QUERY" --yolo -o text > "$OUTPUT" 2>&1 &
+    echo $!
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MINIMAX SUBAGENTS
+# ═══════════════════════════════════════════════════════════════════════════════
+run_minimax() {
+    local QUERY="$1"
+    local OUTPUT="${2:-$TMPDIR/minimax_result.json}"
+
+    if command -v mmc &> /dev/null && [ -f "${HOME}/.mmc.json" ]; then
+        mmc --query "$QUERY" > "$OUTPUT" 2>&1 &
+        echo $!
+    else
+        echo "0"  # MiniMax not configured
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADVERSARIAL VALIDATION
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_adversarial() {
+    local TARGET="$1"
+    local CONSENSUS_REQUIRED=2
+
+    ensure_tmp
+    log_info "Starting adversarial validation for: $TARGET"
+    log_info "   Consensus required: $CONSENSUS_REQUIRED/3"
+    echo ""
+
+    # 1. Claude Review
+    log_info "  [1/3] Claude reviewing..."
+    claude --print -p "Review this code for security and bugs: $TARGET.
+                       Output JSON: {approved: true|false, issues: [], severity: 'HIGH|MEDIUM|LOW'}" \
+        > "$TMPDIR/claude.json" 2>&1 &
+    CLAUDE_PID=$!
+
+    # 2. Codex Review (parallel)
+    log_info "  [2/3] Codex reviewing..."
+    codex exec --yolo --enable-skills -m gpt-5.2-codex \
+        "Use security-review skill. Review: $TARGET
+         Output JSON: {approved: true|false, issues: [], severity}" \
+        > "$TMPDIR/codex.json" 2>&1 &
+    CODEX_PID=$!
+
+    # 3. Gemini Review (parallel)
+    log_info "  [3/3] Gemini reviewing..."
+    gemini "Security and code review for: $TARGET
+            Be critical. Output JSON: {approved: true|false, issues: []}" \
+        --yolo -o json > "$TMPDIR/gemini.json" 2>&1 &
+    GEMINI_PID=$!
+
+    echo ""
+    log_info "Waiting for all 3 models..."
+    wait $CLAUDE_PID $CODEX_PID $GEMINI_PID
+
+    # Calculate consensus
+    CLAUDE_APPROVED=$(grep -o '"approved":\s*true' "$TMPDIR/claude.json" 2>/dev/null && echo "true" || echo "false")
+    CODEX_APPROVED=$(grep -o '"approved":\s*true' "$TMPDIR/codex.json" 2>/dev/null && echo "true" || echo "false")
+    GEMINI_APPROVED=$(grep -o '"approved":\s*true' "$TMPDIR/gemini.json" 2>/dev/null && echo "true" || echo "false")
+
+    APPROVALS=0
+    [[ "$CLAUDE_APPROVED" == "true" ]] && ((APPROVALS++)) || true
+    [[ "$CODEX_APPROVED" == "true" ]] && ((APPROVALS++)) || true
+    [[ "$GEMINI_APPROVED" == "true" ]] && ((APPROVALS++)) || true
+
+    echo ""
+    echo "═══════════════════════════════════════════════════════════"
+    echo "  ADVERSARIAL VALIDATION RESULTS"
+    echo "═══════════════════════════════════════════════════════════"
+    echo ""
+    echo "  Claude:  $([ "$CLAUDE_APPROVED" == "true" ] && echo "✓ Approved" || echo "✗ Rejected")"
+    echo "  Codex:   $([ "$CODEX_APPROVED" == "true" ] && echo "✓ Approved" || echo "✗ Rejected")"
+    echo "  Gemini:  $([ "$GEMINI_APPROVED" == "true" ] && echo "✓ Approved" || echo "✗ Rejected")"
+    echo ""
+    echo "  Consensus: $APPROVALS/3 (required: $CONSENSUS_REQUIRED)"
+    echo ""
+
+    if [[ $APPROVALS -ge $CONSENSUS_REQUIRED ]]; then
+        log_success "ADVERSARIAL VALIDATION PASSED"
+        echo "═══════════════════════════════════════════════════════════"
+        return 0
+    else
+        log_error "ADVERSARIAL VALIDATION FAILED"
+        echo ""
+        echo "  Issues found:"
+        jq -s '.[].issues // [] | .[]' "$TMPDIR"/*.json 2>/dev/null | head -20
+        echo "═══════════════════════════════════════════════════════════"
+        return 2
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PARALLEL REVIEW (6 SUBAGENTS)
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_parallel() {
+    local TARGET="$1"
+    local ASYNC="${2:-false}"
+
+    ensure_tmp
+    log_info "Launching 6 parallel subagents for: $TARGET"
+    echo ""
+
+    declare -a PIDS
+
+    # 1. Codex Security
+    PID=$(run_codex_security "$TARGET")
+    PIDS+=("$PID")
+    log_info "  [1/6] Codex Security: PID $PID"
+
+    # 2. Codex Bugs
+    PID=$(run_codex_bugs "$TARGET")
+    PIDS+=("$PID")
+    log_info "  [2/6] Codex Bugs: PID $PID"
+
+    # 3. Codex Unit Tests
+    PID=$(run_codex_unit_tests "$TARGET")
+    PIDS+=("$PID")
+    log_info "  [3/6] Codex Unit Tests: PID $PID"
+
+    # 4. Gemini Integration
+    PID=$(run_gemini_integration "$TARGET")
+    PIDS+=("$PID")
+    log_info "  [4/6] Gemini Integration: PID $PID"
+
+    # 5. Gemini Research
+    PID=$(run_gemini_research "code quality best practices for $TARGET")
+    PIDS+=("$PID")
+    log_info "  [5/6] Gemini Research: PID $PID"
+
+    # 6. MiniMax Second Opinion
+    PID=$(run_minimax "Provide critical code review for: $TARGET")
+    if [ "$PID" != "0" ]; then
+        PIDS+=("$PID")
+        log_info "  [6/6] MiniMax Review: PID $PID"
+    else
+        log_warn "  [6/6] MiniMax: skipped (not configured)"
+    fi
+
+    echo ""
+
+    if [ "$ASYNC" = "--async" ] || [ "$ASYNC" = "true" ]; then
+        log_warn "Fire & forget mode. PIDs: ${PIDS[*]}"
+        log_info "   Check results in: $TMPDIR/"
+        return 0
+    fi
+
+    log_info "Waiting for ${#PIDS[@]} subagents..."
+    for pid in "${PIDS[@]}"; do
+        wait "$pid" 2>/dev/null || true
+    done
+
+    log_success "All subagents completed"
+    echo ""
+
+    # Summary
+    echo "═══════════════════════════════════════════════════════════"
+    echo "  PARALLEL REVIEW SUMMARY"
+    echo "═══════════════════════════════════════════════════════════"
+    for f in "$TMPDIR"/*; do
+        if [ -f "$f" ]; then
+            local name=$(basename "$f")
+            local lines=$(wc -l < "$f" 2>/dev/null || echo 0)
+            echo "  - $name: $lines lines"
+        fi
+    done
+    echo "═══════════════════════════════════════════════════════════"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# QUALITY GATES (9 LANGUAGES)
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_gates() {
+    local CHECK_ONLY="${1:-}"
+    local HOOK_SCRIPT="${HOOKS_DIR}/quality-gates.sh"
+
+    # Check if hook exists
+    if [ ! -f "$HOOK_SCRIPT" ]; then
+        log_error "Quality gates hook not found at: $HOOK_SCRIPT"
+        log_info "Run the installer to set up hooks: ./install.sh"
+        return 1
+    fi
+
+    # Ensure executable
+    if [ ! -x "$HOOK_SCRIPT" ]; then
+        chmod +x "$HOOK_SCRIPT"
+    fi
+
+    # Run in blocking or check mode
+    if [ "$CHECK_ONLY" = "--check" ]; then
+        log_info "Running quality gates (non-blocking check)..."
+        RALPH_GATES_BLOCKING=0 "$HOOK_SCRIPT"
+    else
+        log_info "Running quality gates (blocking mode)..."
+        RALPH_GATES_BLOCKING=1 "$HOOK_SCRIPT"
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SPECIALIZED COMMANDS
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_security() {
+    local TARGET="$1"
+    ensure_tmp
+
+    log_info "Running security audit on: $TARGET"
+
+    # Codex (primary)
+    log_info "  Starting Codex security audit..."
+    PID1=$(run_codex_security "$TARGET")
+
+    # MiniMax (second opinion)
+    PID2=$(run_minimax "Security audit for: $TARGET. Check: injection, auth, secrets, crypto." "$TMPDIR/minimax_security.json")
+
+    if [ "$PID2" != "0" ]; then
+        wait $PID1 $PID2
+    else
+        wait $PID1
+    fi
+
+    log_success "Security audit complete. Results in: $TMPDIR/"
+}
+
+cmd_bugs() {
+    local TARGET="$1"
+    ensure_tmp
+
+    log_info "Running bug hunting on: $TARGET"
+    PID=$(run_codex_bugs "$TARGET")
+    wait $PID
+    log_success "Bug hunting complete."
+    cat "$TMPDIR/codex_bugs.json" 2>/dev/null | jq '.summary' || true
+}
+
+cmd_unit_tests() {
+    local TARGET="$1"
+    ensure_tmp
+
+    log_info "Generating unit tests for: $TARGET"
+    PID=$(run_codex_unit_tests "$TARGET")
+    wait $PID
+    log_success "Unit test generation complete."
+}
+
+cmd_integration() {
+    local TARGET="$1"
+    ensure_tmp
+
+    log_info "Generating integration tests for: $TARGET"
+    PID=$(run_gemini_integration "$TARGET")
+    wait $PID
+    log_success "Integration test generation complete."
+}
+
+cmd_refactor() {
+    local TARGET="$1"
+    ensure_tmp
+
+    log_info "Running refactoring analysis on: $TARGET"
+    codex exec --yolo --enable-skills -m gpt-5.2-codex \
+        "Refactor: $TARGET
+         Focus on: DRY, SOLID, extract methods, simplify conditionals.
+         Output: refactored code + explanation" \
+        > "$TMPDIR/codex_refactor.json" 2>&1
+    log_success "Refactoring analysis complete."
+}
+
+cmd_research() {
+    local QUERY="$1"
+    ensure_tmp
+
+    log_info "Researching: $QUERY"
+    gemini "Research best practices and current solutions for: $QUERY" \
+        --yolo -o text > "$TMPDIR/gemini_research.txt" 2>&1
+    cat "$TMPDIR/gemini_research.txt"
+}
+
+cmd_minimax() {
+    local QUERY="$1"
+
+    if ! command -v mmc &> /dev/null || [ ! -f "${HOME}/.mmc.json" ]; then
+        log_error "MiniMax not configured. Run: mmc --setup"
+        return 1
+    fi
+
+    log_info "Querying MiniMax M2.1..."
+    mmc --query "$QUERY"
+}
+
+cmd_clarify() {
+    local TASK="$1"
+
+    log_info "Generating clarification questions for: $TASK"
+    echo ""
+
+    # Use Claude with the skill
+    claude --print -p "Use the ask-questions-if-underspecified skill.
+
+                       Task: $TASK
+
+                       Generate MUST_HAVE and NICE_TO_HAVE questions."
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# LOOP COMMAND
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_loop() {
+    local TASK="$1"
+    local USE_MINIMAX="${2:-false}"
+    local MAX_ITER=$CLAUDE_MAX_ITER
+
+    if [ "$USE_MINIMAX" = "--mmc" ] || [ "$USE_MINIMAX" = "--minimax" ]; then
+        MAX_ITER=$MINIMAX_MAX_ITER
+        log_info "Starting Ralph loop with MiniMax ($MAX_ITER iterations max)"
+    elif [ "$USE_MINIMAX" = "--lightning" ]; then
+        MAX_ITER=$LIGHTNING_MAX_ITER
+        log_info "Starting Ralph loop with Lightning ($MAX_ITER iterations max)"
+    else
+        log_info "Starting Ralph loop with Claude ($MAX_ITER iterations max)"
+    fi
+
+    log_info "   Task: $TASK"
+    echo ""
+
+    local ITER=0
+    while [ $ITER -lt $MAX_ITER ]; do
+        ((ITER++))
+        log_info "  Iteration $ITER/$MAX_ITER"
+
+        # Execute task
+        if [ "$USE_MINIMAX" = "--mmc" ] || [ "$USE_MINIMAX" = "--minimax" ]; then
+            RESULT=$(mmc --query "$TASK. Check if complete, output VERIFIED_DONE if done." 2>&1)
+        else
+            RESULT=$(claude --print -p "$TASK. Check if complete, output VERIFIED_DONE if done." 2>&1)
+        fi
+
+        # Check for completion
+        if echo "$RESULT" | grep -q "VERIFIED_DONE"; then
+            log_success "Task completed at iteration $ITER"
+            return 0
+        fi
+    done
+
+    log_warn "Max iterations ($MAX_ITER) reached without VERIFIED_DONE"
+    return 1
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SELF-IMPROVEMENT COMMANDS
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_retrospective() {
+    ensure_dirs
+
+    log_info "Running retrospective analysis..."
+    echo ""
+
+    claude --print -p "Use the retrospective skill.
+
+                       Analyze the last task completed and propose improvements to the Ralph Wiggum system.
+
+                       Categories to analyze:
+                       1. Routing effectiveness (was complexity accurate?)
+                       2. Clarification quality (right questions asked?)
+                       3. Agent performance (which were useful?)
+                       4. Quality gate effectiveness
+                       5. Iteration efficiency
+
+                       Output improvement proposals with:
+                       - Type (routing_adjustment, clarification_enhancement, agent_behavior, new_command, delegation_update, quality_gate)
+                       - File to modify
+                       - Specific change
+                       - Justification
+                       - Risk level"
+}
+
+cmd_improvements() {
+    ensure_dirs
+    local ACTION="${1:-list}"
+
+    case "$ACTION" in
+        list|"")
+            log_info "Pending improvements:"
+            if [ -f "$IMPROVEMENTS_DIR/pending.md" ] && [ -s "$IMPROVEMENTS_DIR/pending.md" ]; then
+                cat "$IMPROVEMENTS_DIR/pending.md"
+            else
+                echo "  No pending improvements."
+            fi
+            ;;
+        apply)
+            shift
+            local IDS="${1:-all}"
+            log_info "Applying improvements: $IDS"
+            # Create backup first
+            cp -r "${HOME}/.claude" "$IMPROVEMENTS_DIR/backups/.claude-$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
+            log_success "Backup created. Implement apply logic here."
+            ;;
+        reject)
+            shift
+            local IDS="${1:-all}"
+            log_info "Rejecting improvements: $IDS"
+            ;;
+        *)
+            log_error "Unknown action: $ACTION. Use: list, apply, reject"
+            ;;
+    esac
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ORCHESTRATION
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_orch() {
+    local TASK="$1"
+
+    echo ""
+    echo "═══════════════════════════════════════════════════════════"
+    echo "  RALPH WIGGUM v2.12 ORCHESTRATION"
+    echo "═══════════════════════════════════════════════════════════"
+    echo ""
+
+    # Step 1: Clarify
+    log_info "[1/6] CLARIFY"
+    cmd_clarify "$TASK"
+    echo ""
+    read -p "Press Enter to continue after answering questions (or Ctrl+C to abort)..."
+
+    # Step 2: Classify
+    log_info "[2/6] CLASSIFY"
+    claude --print -p "Use task-classifier skill. Classify complexity (1-10) for: $TASK"
+    echo ""
+
+    # Step 3: Delegate
+    log_info "[3/6] DELEGATE"
+    log_info "   Launching appropriate subagents..."
+
+    # Step 4: Execute
+    log_info "[4/6] EXECUTE"
+    cmd_parallel . false
+
+    # Step 5: Validate
+    log_info "[5/6] VALIDATE"
+    cmd_gates --check
+
+    # Step 6: Retrospective
+    log_info "[6/6] RETROSPECTIVE"
+    cmd_retrospective
+
+    echo ""
+    echo "═══════════════════════════════════════════════════════════"
+    log_success "  ORCHESTRATION COMPLETE"
+    echo "═══════════════════════════════════════════════════════════"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# UNINSTALL
+# ═══════════════════════════════════════════════════════════════════════════════
+cmd_uninstall() {
+    local UNINSTALL_SCRIPT="${RALPH_DIR}/../.local/share/ralph/uninstall.sh"
+
+    # Try multiple locations
+    if [ -f "./uninstall.sh" ]; then
+        exec ./uninstall.sh "$@"
+    elif [ -f "${HOME}/.ralph/uninstall.sh" ]; then
+        exec "${HOME}/.ralph/uninstall.sh" "$@"
+    else
+        log_error "Uninstall script not found."
+        log_info "Download from: https://github.com/yourrepo/multi-agent-ralph-loop"
+        echo ""
+        echo "Manual uninstall:"
+        echo "  rm -f ~/.local/bin/ralph ~/.local/bin/mmc"
+        echo "  rm -rf ~/.ralph"
+        echo "  # Remove ralph sections from ~/.zshrc or ~/.bashrc"
+        return 1
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════════════════════════
+main() {
+    local CMD="${1:-help}"
+    shift || true
+
+    case "$CMD" in
+        # Orchestration
+        orch|orchestrate)
+            cmd_orch "$@"
+            ;;
+        loop)
+            cmd_loop "$@"
+            ;;
+        clarify)
+            cmd_clarify "$@"
+            ;;
+
+        # Review
+        review|full-review)
+            cmd_parallel "$@"
+            ;;
+        parallel)
+            cmd_parallel "$@"
+            ;;
+
+        # Specialized
+        security)
+            cmd_security "$@"
+            ;;
+        bugs)
+            cmd_bugs "$@"
+            ;;
+        unit-tests|tests)
+            cmd_unit_tests "$@"
+            ;;
+        integration)
+            cmd_integration "$@"
+            ;;
+        refactor)
+            cmd_refactor "$@"
+            ;;
+        research)
+            cmd_research "$@"
+            ;;
+        minimax|mm)
+            cmd_minimax "$@"
+            ;;
+
+        # Validation
+        gates)
+            cmd_gates "$@"
+            ;;
+        adversarial|adv)
+            cmd_adversarial "$@"
+            ;;
+
+        # Self-improvement
+        retrospective|retro)
+            cmd_retrospective
+            ;;
+        improvements|improve)
+            cmd_improvements "$@"
+            ;;
+
+        # Utility
+        status)
+            log_info "Active ralph processes:"
+            ps aux | grep -E "(codex|gemini|mmc|ralph)" | grep -v grep || echo "  None"
+            ;;
+        version|-v|--version)
+            echo "ralph v$VERSION"
+            ;;
+        help|-h|--help)
+            show_help
+            ;;
+        --uninstall|uninstall)
+            cmd_uninstall "$@"
+            ;;
+        *)
+            log_error "Unknown command: $CMD"
+            echo "Run 'ralph help' for usage."
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

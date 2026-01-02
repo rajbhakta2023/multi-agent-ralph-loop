@@ -1,0 +1,78 @@
+# Skill: Retrospective & Self-Improvement
+
+## Purpose
+Analyze completed tasks to improve the Ralph Wiggum system.
+
+## When to Use
+MANDATORY after every task completion, before declaring VERIFIED_DONE.
+
+## Analysis Categories
+
+### 1. Routing Effectiveness
+- Was the complexity classification accurate?
+- Did the chosen model perform well?
+- Should routing thresholds change?
+
+### 2. Clarification Quality
+- Were the right questions asked?
+- Did any missed clarifications cause rework?
+- Should question templates be updated?
+
+### 3. Agent Performance
+- Which subagents were most useful?
+- Any agents that didn't add value?
+- New agent patterns needed?
+
+### 4. Quality Gate Effectiveness
+- Did gates catch real issues?
+- Any false positives/negatives?
+- Missing validations?
+
+### 5. Iteration Efficiency
+- How many iterations were used?
+- Could it have been done faster?
+- Any wasted iterations?
+
+## Output Format
+
+```markdown
+## 📊 Task Retrospective
+
+### Summary
+- Task: [description]
+- Complexity: [classified] → [actual]
+- Iterations: [used] / [limit]
+- Models: [list used]
+
+### What Went Well
+- [positive 1]
+- [positive 2]
+
+### Improvement Opportunities
+1. **[Category]**: [description]
+   - Current: [what happens now]
+   - Proposed: [improvement]
+   - Impact: [low/medium/high]
+   - Risk: [low/medium/high]
+
+### Proposed Changes
+```json
+{
+  "type": "routing_adjustment|clarification_enhancement|agent_behavior|new_command|delegation_update|quality_gate",
+  "file": "[path to modify]",
+  "change": "[description]",
+  "justification": "[why]"
+}
+```
+```
+
+## Improvement Types
+
+| Type | Example |
+|------|---------|
+| routing_adjustment | Change complexity thresholds |
+| clarification_enhancement | Add new question templates |
+| agent_behavior | Modify agent instructions |
+| new_command | Create new slash command |
+| delegation_update | Change model assignments |
+| quality_gate | Add/modify validations |

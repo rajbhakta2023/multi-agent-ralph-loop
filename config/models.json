@@ -1,0 +1,24 @@
+{
+  "iteration_limits": {
+    "claude_sonnet": 15,
+    "claude_opus": 15,
+    "minimax_m21": 30,
+    "minimax_lightning": 60
+  },
+  "model_routing": {
+    "complexity_1_2": "minimax_lightning",
+    "complexity_3_4": "minimax_m21",
+    "complexity_5_6": "sonnet_with_codex_gemini",
+    "complexity_7_8": "opus_with_sonnet_clis",
+    "complexity_9_10": "opus_thinking"
+  },
+  "cost_comparison": {
+    "claude_sonnet": {"input": 3.00, "output": 15.00},
+    "minimax_m21": {"input": 0.30, "output": 1.20},
+    "minimax_lightning": {"input": 0.15, "output": 0.60}
+  },
+  "adversarial": {
+    "consensus_required": 2,
+    "models": ["claude", "codex", "gemini"]
+  }
+}

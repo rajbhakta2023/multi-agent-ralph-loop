@@ -1,0 +1,14 @@
+---
+name: refactor
+description: "Systematic refactoring with Codex"
+argument-hint: "<path>"
+---
+
+# /refactor
+
+Code refactoring: DRY, SOLID, extract methods.
+
+## Execution
+```bash
+ralph refactor "$ARGUMENTS"
+```
