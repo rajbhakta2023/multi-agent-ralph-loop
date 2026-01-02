@@ -157,9 +157,40 @@ log_usage() {
     local ACTION="$1"
     local MODEL="$2"
     local CHARS="${3:-0}"
-    local LOG_FILE="${RALPH_DIR}/logs/usage.jsonl"
-    mkdir -p "$(dirname "$LOG_FILE")"
-    echo "{\"ts\":$(date +%s),\"action\":\"$ACTION\",\"model\":\"$MODEL\",\"chars\":$CHARS}" >> "$LOG_FILE"
+    local TIMESTAMP
+    TIMESTAMP=$(date +%s)
+
+    # Get project name from git if available
+    local PROJECT=""
+    if command -v git &>/dev/null && git rev-parse --is-inside-work-tree &>/dev/null 2>&1; then
+        PROJECT=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "")
+    fi
+
+    # Build JSON entry using jq for safety
+    local LOG_ENTRY
+    LOG_ENTRY=$(jq -n \
+        --argjson ts "$TIMESTAMP" \
+        --arg action "$ACTION" \
+        --arg model "$MODEL" \
+        --argjson chars "$CHARS" \
+        --arg project "$PROJECT" \
+        '{ts: $ts, action: $action, model: $model, chars: $chars, project: $project}')
+
+    # 1. GLOBAL LOG: ~/.ralph/logs/usage.jsonl (all sessions)
+    local GLOBAL_LOG="${RALPH_DIR}/logs/usage.jsonl"
+    mkdir -p "$(dirname "$GLOBAL_LOG")"
+    echo "$LOG_ENTRY" >> "$GLOBAL_LOG"
+
+    # 2. PROJECT LOG: .ralph/usage.jsonl (per-repo tracking)
+    if [ -n "$PROJECT" ]; then
+        local PROJECT_ROOT
+        PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+        if [ -n "$PROJECT_ROOT" ]; then
+            local PROJECT_LOG="${PROJECT_ROOT}/.ralph/usage.jsonl"
+            mkdir -p "$(dirname "$PROJECT_LOG")"
+            echo "$LOG_ENTRY" >> "$PROJECT_LOG"
+        fi
+    fi
 }
 
 show_status() {
@@ -282,21 +313,69 @@ loop() {
 }
 
 cmd_stats() {
-    local LOG_FILE="${RALPH_DIR}/logs/usage.jsonl"
-    if [[ ! -f "$LOG_FILE" ]]; then
-        echo "No usage logs found"
-        return 0
+    local SCOPE="${1:-all}"
+    local GLOBAL_LOG="${RALPH_DIR}/logs/usage.jsonl"
+    local PROJECT_LOG=""
+
+    # Check for project-level log
+    if command -v git &>/dev/null && git rev-parse --is-inside-work-tree &>/dev/null 2>&1; then
+        local PROJECT_ROOT
+        PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+        if [ -n "$PROJECT_ROOT" ] && [ -f "${PROJECT_ROOT}/.ralph/usage.jsonl" ]; then
+            PROJECT_LOG="${PROJECT_ROOT}/.ralph/usage.jsonl"
+        fi
     fi
-    echo "=== MiniMax Usage Stats ==="
-    echo "Total queries: $(wc -l < "$LOG_FILE" | tr -d ' ')"
+
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "              MINIMAX USAGE STATISTICS (v2.17)"
+    echo "═══════════════════════════════════════════════════════════════"
     echo ""
-    echo "By action:"
-    jq -r '.action' "$LOG_FILE" 2>/dev/null | sort | uniq -c | sed 's/^/  /' || echo "  (install jq for detailed stats)"
-    echo ""
-    echo "By model:"
-    jq -r '.model' "$LOG_FILE" 2>/dev/null | sort | uniq -c | sed 's/^/  /' || echo "  (install jq for detailed stats)"
-    echo ""
-    echo "Total chars processed: $(jq -s '[.[].chars] | add' "$LOG_FILE" 2>/dev/null || echo "N/A")"
+
+    # GLOBAL STATS
+    if [[ "$SCOPE" == "all" ]] || [[ "$SCOPE" == "global" ]]; then
+        echo "📊 GLOBAL USAGE (all projects)"
+        echo "───────────────────────────────────────────────────────────────"
+        if [[ -f "$GLOBAL_LOG" ]]; then
+            echo "  Log: $GLOBAL_LOG"
+            echo "  Total queries: $(wc -l < "$GLOBAL_LOG" | tr -d ' ')"
+            echo ""
+            echo "  By model:"
+            jq -r '.model' "$GLOBAL_LOG" 2>/dev/null | sort | uniq -c | sed 's/^/    /'
+            echo ""
+            echo "  By project:"
+            jq -r '.project // "unknown"' "$GLOBAL_LOG" 2>/dev/null | sort | uniq -c | sed 's/^/    /'
+            echo ""
+            echo "  Total chars: $(jq -s '[.[].chars] | add' "$GLOBAL_LOG" 2>/dev/null || echo "N/A")"
+        else
+            echo "  No global logs found"
+        fi
+        echo ""
+    fi
+
+    # PROJECT STATS
+    if [[ "$SCOPE" == "all" ]] || [[ "$SCOPE" == "project" ]]; then
+        echo "📁 PROJECT USAGE (this repo only)"
+        echo "───────────────────────────────────────────────────────────────"
+        if [[ -n "$PROJECT_LOG" ]] && [[ -f "$PROJECT_LOG" ]]; then
+            echo "  Log: $PROJECT_LOG"
+            echo "  Total queries: $(wc -l < "$PROJECT_LOG" | tr -d ' ')"
+            echo ""
+            echo "  By model:"
+            jq -r '.model' "$PROJECT_LOG" 2>/dev/null | sort | uniq -c | sed 's/^/    /'
+            echo ""
+            echo "  By action:"
+            jq -r '.action' "$PROJECT_LOG" 2>/dev/null | sort | uniq -c | sed 's/^/    /'
+            echo ""
+            echo "  Total chars: $(jq -s '[.[].chars] | add' "$PROJECT_LOG" 2>/dev/null || echo "N/A")"
+        else
+            echo "  No project-level logs found (not in a git repo or no usage yet)"
+        fi
+        echo ""
+    fi
+
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  Usage: mmc --stats [all|global|project]"
+    echo "═══════════════════════════════════════════════════════════════"
 }
 
 main() {
@@ -334,7 +413,8 @@ main() {
             show_status
             ;;
         --stats)
-            cmd_stats
+            shift
+            cmd_stats "${1:-all}"
             ;;
         --version|-v)
             echo "mmc v$VERSION"

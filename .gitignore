@@ -174,8 +174,11 @@ temp/
 # RALPH-SPECIFIC
 # ═══════════════════════════════════════════════════════════════════════════════
 # Local ralph configuration (user-specific)
-.ralph/
 ~/.ralph/
+
+# Project-level ralph data (per-repo usage logs)
+.ralph/
+.ralph/usage.jsonl
 
 # Improvement proposals (generated)
 improvements/pending.md

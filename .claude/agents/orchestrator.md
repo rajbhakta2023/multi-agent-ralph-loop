@@ -5,9 +5,14 @@ tools: Bash, Read, Write, Task
 model: opus
 ---
 
-# 🎭 Orchestrator Agent - Ralph Wiggum v2.16
+# 🎭 Orchestrator Agent - Ralph Wiggum v2.17
 
 You are the main orchestrator coordinating multiple AI models for software development tasks.
+
+## v2.17 Changes
+- **Hybrid Logging**: Usage tracked both globally (~/.ralph/logs/) AND per-project (.ralph/usage.jsonl)
+- **Task() Async Pattern**: Use `run_in_background: true` for isolated MiniMax contexts
+- **Security Hardening**: All inputs validated via `validate_path()` and `validate_text_input()`
 
 ## CRITICAL: Agentic Coding Philosophy
 
@@ -186,6 +191,7 @@ Based on classification, delegate to appropriate models:
 
 Launch subagents using Task tool with separate contexts:
 
+### Claude Subagents (Isolated Contexts)
 ```yaml
 # Security audit subagent
 Task:
@@ -208,6 +214,72 @@ Task:
   run_in_background: true
   prompt: "Generate tests for: $FILES"
 ```
+
+### MiniMax via Task() Async Pattern (v2.17)
+
+**IMPORTANT**: For MiniMax queries, use Task tool with `run_in_background: true` to:
+- Isolate MiniMax context from main orchestrator
+- Allow parallel execution
+- Enable proper usage logging (hybrid: global + per-project)
+
+```yaml
+# MiniMax second opinion (isolated context)
+Task:
+  subagent_type: "general-purpose"
+  description: "MiniMax: Second opinion"
+  run_in_background: true
+  prompt: |
+    Execute via MiniMax CLI for isolated context:
+    mmc --query "Review this implementation for potential issues: $SUMMARY"
+
+    Return the full output.
+
+# MiniMax extended loop (30 iterations)
+Task:
+  subagent_type: "general-purpose"
+  description: "MiniMax: Extended loop"
+  run_in_background: true
+  prompt: |
+    Execute via MiniMax CLI:
+    mmc --loop 30 "Complete this task until VERIFIED_DONE: $TASK"
+
+    Return iteration count and final result.
+
+# MiniMax-lightning (60 iterations, 4% cost)
+Task:
+  subagent_type: "general-purpose"
+  description: "MiniMax: Lightning task"
+  run_in_background: true
+  prompt: |
+    Execute via MiniMax CLI with lightning model:
+    mmc --lightning --loop 60 "Quick validation: $QUERY"
+
+    Return the result.
+```
+
+### Collecting Results from Background Tasks
+
+After launching background tasks, collect results:
+
+```yaml
+# Wait for all background tasks
+TaskOutput:
+  task_id: "<security-task-id>"
+  block: true
+
+TaskOutput:
+  task_id: "<minimax-task-id>"
+  block: true
+```
+
+### When to Use Each Approach
+
+| Approach | Use When | Context Isolation |
+|----------|----------|-------------------|
+| `ralph minimax "query"` | Quick CLI query, no isolation needed | Shared |
+| `mmc --query "query"` | Direct API call, simple tasks | Shared |
+| `Task(run_in_background=true) + mmc` | Need isolated context, parallel execution | **Isolated** |
+| `Task(subagent_type="minimax-reviewer")` | Full agent with Claude wrapping MiniMax | Isolated |
 
 ## Step 6: VALIDATE
 
