@@ -1,18 +1,35 @@
-# Multi-Agent Ralph v2.14
+# Multi-Agent Ralph v2.16
 
-Orchestration with adversarial validation, self-improvement, and 9-language quality gates.
+Orchestration with **automatic planning**, **intensive clarification**, adversarial validation, self-improvement, and 9-language quality gates.
 
-## Mandatory Flow
+## v2.16 Key Changes
+
+- **Auto Plan Mode**: Automatically enters `EnterPlanMode` for non-trivial tasks
+- **AskUserQuestion**: Uses native Claude tool for interactive MUST_HAVE/NICE_TO_HAVE questions
+- **Deep Clarification**: New skill for comprehensive task understanding
+
+## Mandatory Flow (7 Steps)
 
 ```
-1. /clarify     → MUST_HAVE / NICE_TO_HAVE questions
+0. AUTO-PLAN    → EnterPlanMode (automatic for non-trivial)
+1. /clarify     → AskUserQuestion (MUST_HAVE + NICE_TO_HAVE)
 2. /classify    → Complexity 1-10
-3. @orchestrator → Delegate to subagents
-4. ralph gates  → Quality gates (9 languages)
-5. /adversarial → 2/3 consensus (critical code)
-6. /retrospective → Propose improvements
-7. VERIFIED_DONE
+3. PLAN         → Write plan, get user approval
+4. @orchestrator → Delegate to subagents
+5. ralph gates  → Quality gates (9 languages)
+6. /adversarial → 2/3 consensus (complexity >= 7)
+7. /retrospective → Propose improvements
+→ VERIFIED_DONE
 ```
+
+## Clarification Philosophy
+
+**The key to successful agentic coding is MAXIMUM CLARIFICATION before implementation.**
+
+- **NEVER assume** - always use `AskUserQuestion`
+- **MUST_HAVE questions** are blocking - cannot proceed without answers
+- **NICE_TO_HAVE questions** can assume defaults if skipped
+- **Enter Plan Mode** automatically for any non-trivial task
 
 ## Iteration Limits
 
@@ -26,7 +43,7 @@ Orchestration with adversarial validation, self-improvement, and 9-language qual
 
 ```bash
 # CLI
-ralph orch "task"         # Full orchestration
+ralph orch "task"         # Full orchestration (7 steps)
 ralph adversarial src/    # 2/3 consensus
 ralph parallel src/       # 6 subagents
 ralph security src/       # Security audit
@@ -40,25 +57,55 @@ ralph retrospective       # Self-improvement
 mmc                       # Launch with MiniMax
 mmc --loop 30 "task"      # Extended loop
 
-# Slash Commands
+# Slash Commands (Claude Code)
 /orchestrator /clarify /full-review /parallel
 /security /bugs /unit-tests /refactor
 /research /minimax /gates /loop
 /adversarial /retrospective /improvements
 ```
 
+## Native Claude Tools (v2.16)
+
+```yaml
+# Automatic for non-trivial tasks
+EnterPlanMode: {}
+
+# Intensive clarification
+AskUserQuestion:
+  questions:
+    - question: "What is the primary goal?"
+      header: "Goal"
+      multiSelect: false
+      options:
+        - label: "New feature"
+          description: "Adding new functionality"
+        - label: "Bug fix"
+          description: "Correcting behavior"
+
+# Exit only when plan approved
+ExitPlanMode: {}
+```
+
 ## Agents (9)
 
 ```bash
-@orchestrator    # Opus - Coordinator
+@orchestrator       # Opus - Coordinator (uses EnterPlanMode + AskUserQuestion)
 @security-auditor
 @code-reviewer
 @test-architect
-@debugger        # Opus
+@debugger           # Opus
 @refactorer
 @docs-writer
 @frontend-reviewer  # Opus
 @minimax-reviewer   # Fallback
+```
+
+## Skills (v2.16)
+
+```bash
+deep-clarification  # Intensive AskUserQuestion patterns
+task-classifier     # Complexity 1-10 routing
+retrospective       # Self-improvement analysis
 ```
 
 ## Aliases
@@ -71,4 +118,4 @@ mm=mmc mml="mmc --loop 30"
 
 ## Completion
 
-`VERIFIED_DONE` = clarified + classified + implemented + gates passed + adversarial passed (if critical) + retrospective done
+`VERIFIED_DONE` = plan approved + all MUST_HAVE answered + classified + implemented + gates passed + adversarial passed (if critical) + retrospective done

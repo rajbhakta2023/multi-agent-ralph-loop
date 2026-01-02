@@ -192,7 +192,7 @@ teardown() {
 @test "ralph version shows version number" {
     run bash "$RALPH_SCRIPT" version
     [ "$status" -eq 0 ]
-    [[ "$output" == *"2.14"* ]]
+    [[ "$output" == *"2.15"* ]]
 }
 
 @test "ralph unknown command exits with error" {

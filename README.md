@@ -1,21 +1,28 @@
-# 🎭 Multi-Agent Ralph Wiggum v2.14
+# 🎭 Multi-Agent Ralph Wiggum v2.16
 
-![Version](https://img.shields.io/badge/version-2.14.0-blue)
+![Version](https://img.shields.io/badge/version-2.16.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-compatible-purple)
 
 > "Me fail English? That's unpossible!" - Ralph Wiggum
 
-A sophisticated multi-agent orchestration system for Claude Code that coordinates multiple AI models (Claude, Codex CLI, Gemini CLI, MiniMax) with adversarial validation, self-improvement capabilities, and comprehensive quality gates.
+A sophisticated multi-agent orchestration system for Claude Code that coordinates multiple AI models (Claude, Codex CLI, Gemini CLI, MiniMax) with **automatic planning**, **intensive clarification**, adversarial validation, self-improvement capabilities, and comprehensive quality gates.
 
-## 🌟 What's New in v2.14
+## 🌟 What's New in v2.16
 
-- **Restored Adversarial Validation**: 2/3 consensus required (Claude + Codex + Gemini)
-- **15 Slash Commands**: All commands from v2.5-2.6 restored + new ones
-- **Codex Skills with Clarification**: `ask-questions-if-underspecified` skill added to Codex
-- **Updated Iteration Limits**: Claude 15, MiniMax 30, Lightning 60
-- **Gemini Config Restored**: `.gemini/GEMINI.md` for context
-- **Full Aliases**: 15+ shell aliases for quick access
+- **Auto Plan Mode**: Automatically enters `EnterPlanMode` for non-trivial tasks - no more manual planning requests
+- **AskUserQuestion Integration**: Uses Claude's native tool for interactive MUST_HAVE/NICE_TO_HAVE questions
+- **Deep Clarification Skill**: New skill with comprehensive questioning patterns by domain
+- **7-Step Flow**: Updated orchestration from 6 to 7 steps with dedicated planning phase
+- **Clarification Philosophy**: "MAXIMUM CLARIFICATION before implementation"
+
+### v2.15 Features (included)
+- **Safe Settings Merge**: Installation preserves your existing settings.json
+- **Non-Destructive Install/Uninstall**: Only Ralph-specific entries are added/removed
+
+### v2.14 Features (included)
+- **Adversarial Validation**: 2/3 consensus required (Claude + Codex + Gemini)
+- **15 Slash Commands**: Full command suite for orchestration
 - **Self-Improvement**: Retrospective analysis after every task
 - **9 Language LSP**: TS, JS, Python, Go, Rust, Solidity, Swift, JSON, YAML
 
@@ -33,12 +40,14 @@ A sophisticated multi-agent orchestration system for Claude Code that coordinate
 ┌─────────────────────────────────────────────────────────────────┐
 │                    ORCHESTRATOR (Opus)                          │
 │                                                                 │
-│  1. CLARIFY    → ask-questions-if-underspecified               │
+│  0. AUTO-PLAN  → EnterPlanMode (automatic)                     │
+│  1. CLARIFY    → AskUserQuestion (MUST_HAVE/NICE_TO_HAVE)      │
 │  2. CLASSIFY   → task-classifier (complexity 1-10)             │
-│  3. DELEGATE   → Route to optimal model                        │
-│  4. EXECUTE    → Parallel subagents                            │
-│  5. VALIDATE   → Quality gates + Adversarial validation        │
-│  6. RETROSPECT → Self-improvement proposals                    │
+│  3. PLAN       → Write detailed plan, get approval             │
+│  4. DELEGATE   → Route to optimal model                        │
+│  5. EXECUTE    → Parallel subagents                            │
+│  6. VALIDATE   → Quality gates + Adversarial validation        │
+│  7. RETROSPECT → Self-improvement proposals                    │
 └─────────────────────────────────────────────────────────────────┘
         │
         ▼
@@ -65,8 +74,8 @@ A sophisticated multi-agent orchestration system for Claude Code that coordinate
 
 ```bash
 # 1. Install
-unzip multi-agent-ralph-v2.14.zip
-cd ralph-v2.14
+unzip multi-agent-ralph-v2.15.zip
+cd ralph-v2.15
 chmod +x install.sh
 ./install.sh
 source ~/.zshrc  # or ~/.bashrc
@@ -83,7 +92,7 @@ ralph --mmc loop "Extended task"
 ## 📁 Structure
 
 ```
-ralph-v2.14/
+ralph-v2.15/
 ├── .claude/
 │   ├── agents/                     # 9 specialized agents
 │   │   ├── orchestrator.md         # Main coordinator (Opus)

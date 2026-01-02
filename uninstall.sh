@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-VERSION="2.14.0"
+VERSION="2.16.0"
 
 # Installation directories
 INSTALL_DIR="${HOME}/.local/bin"
@@ -106,6 +106,82 @@ remove_claude_components() {
     [ -f "${CLAUDE_DIR}/hooks/quality-gates.sh" ] && rm -f "${CLAUDE_DIR}/hooks/quality-gates.sh"
     [ -f "${CLAUDE_DIR}/hooks/git-safety-guard.py" ] && rm -f "${CLAUDE_DIR}/hooks/git-safety-guard.py"
     log_success "Removed Ralph hooks (quality-gates.sh, git-safety-guard.py)"
+
+    # Clean settings.json (remove only Ralph entries, preserve user config)
+    clean_settings_json
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CLEAN SETTINGS.JSON (Remove only Ralph entries, preserve everything else)
+# ═══════════════════════════════════════════════════════════════════════════════
+clean_settings_json() {
+    local SETTINGS="${CLAUDE_DIR}/settings.json"
+    local TEMP_CLEAN="${CLAUDE_DIR}/.settings.clean.tmp"
+
+    if [ ! -f "$SETTINGS" ]; then
+        log_info "No settings.json to clean"
+        return 0
+    fi
+
+    # Validate JSON
+    if ! jq empty "$SETTINGS" 2>/dev/null; then
+        log_warn "settings.json is invalid JSON - skipping cleanup"
+        return 0
+    fi
+
+    log_info "Cleaning settings.json (removing only Ralph entries)..."
+
+    # Define Ralph-specific patterns to remove
+    # Permissions added by Ralph
+    RALPH_PERMISSIONS='["Bash(ralph:*)", "Bash(mmc:*)"]'
+
+    # Hook commands added by Ralph
+    RALPH_HOOK_COMMANDS='["${HOME}/.claude/hooks/git-safety-guard.py", "${HOME}/.claude/hooks/quality-gates.sh"]'
+
+    jq --argjson ralph_perms "$RALPH_PERMISSIONS" '
+    # Remove Ralph-specific permissions from allow array
+    if .permissions.allow then
+        .permissions.allow = [.permissions.allow[] | select(. as $p | ($ralph_perms | index($p)) | not)]
+    else . end |
+
+    # Remove hooks that reference Ralph hook files
+    if .hooks.PreToolUse then
+        .hooks.PreToolUse = [
+            .hooks.PreToolUse[] |
+            .hooks = [.hooks[] | select(.command | test("git-safety-guard|quality-gates") | not)] |
+            select(.hooks | length > 0)
+        ]
+    else . end |
+
+    if .hooks.PostToolUse then
+        .hooks.PostToolUse = [
+            .hooks.PostToolUse[] |
+            .hooks = [.hooks[] | select(.command | test("git-safety-guard|quality-gates") | not)] |
+            select(.hooks | length > 0)
+        ]
+    else . end |
+
+    # Clean up empty arrays
+    if .hooks.PreToolUse == [] then del(.hooks.PreToolUse) else . end |
+    if .hooks.PostToolUse == [] then del(.hooks.PostToolUse) else . end |
+    if .hooks == {} then del(.hooks) else . end |
+    if .permissions.allow == [] then del(.permissions.allow) else . end |
+    if .permissions == {} then del(.permissions) else . end
+    ' "$SETTINGS" > "$TEMP_CLEAN" 2>/dev/null
+
+    if jq empty "$TEMP_CLEAN" 2>/dev/null; then
+        # Backup original
+        cp "$SETTINGS" "${SETTINGS}.ralph-uninstall-backup"
+        mv "$TEMP_CLEAN" "$SETTINGS"
+        log_success "Settings cleaned:"
+        log_success "  - Ralph permissions: REMOVED"
+        log_success "  - Ralph hooks: REMOVED"
+        log_success "  - Your other settings: PRESERVED"
+        log_success "  - Backup: ${SETTINGS}.ralph-uninstall-backup"
+    else
+        rm -f "$TEMP_CLEAN"
+        log_warn "Could not clean settings.json - manual cleanup may be needed"
+    fi
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -128,30 +204,62 @@ remove_ralph_data() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# REMOVE CODEX CONFIG
+# REMOVE CODEX CONFIG (Only Ralph section, preserve user config)
 # ═══════════════════════════════════════════════════════════════════════════════
 remove_codex_config() {
     log_info "Removing Codex CLI config..."
 
-    [ -f "${HOME}/.codex/instructions.md" ] && rm -f "${HOME}/.codex/instructions.md"
-    [ -d "${HOME}/.codex/skills" ] && rm -rf "${HOME}/.codex/skills"
+    local CODEX_INSTRUCTIONS="${HOME}/.codex/instructions.md"
+    local RALPH_START="# === RALPH WIGGUM CODEX CONFIG ==="
+    local RALPH_END="# === END RALPH WIGGUM CODEX CONFIG ==="
 
-    log_success "Codex config removed"
+    if [ -f "$CODEX_INSTRUCTIONS" ]; then
+        if grep -q "$RALPH_START" "$CODEX_INSTRUCTIONS" 2>/dev/null; then
+            # Remove only Ralph section
+            log_info "Removing Ralph section from Codex instructions..."
+            local TEMP_FILE="${CODEX_INSTRUCTIONS}.tmp"
+            sed "/$RALPH_START/,/$RALPH_END/d" "$CODEX_INSTRUCTIONS" > "$TEMP_FILE"
+            mv "$TEMP_FILE" "$CODEX_INSTRUCTIONS"
+            log_success "Codex instructions cleaned (your config preserved)"
+        else
+            log_info "No Ralph section found in Codex instructions"
+        fi
+    fi
+
+    # Remove Ralph-specific skills
+    local RALPH_SKILLS=("security-review" "bug-hunter" "test-generation" "ask-questions-if-underspecified")
+    for skill in "${RALPH_SKILLS[@]}"; do
+        [ -d "${HOME}/.codex/skills/${skill}" ] && rm -rf "${HOME}/.codex/skills/${skill}"
+    done
+    log_success "Ralph Codex skills removed"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# REMOVE GEMINI CONFIG
+# REMOVE GEMINI CONFIG (Only Ralph section, preserve user config)
 # ═══════════════════════════════════════════════════════════════════════════════
 remove_gemini_config() {
     log_info "Removing Gemini CLI config..."
 
-    [ -f "${HOME}/.gemini/GEMINI.md" ] && rm -f "${HOME}/.gemini/GEMINI.md"
+    local GEMINI_CONFIG="${HOME}/.gemini/GEMINI.md"
+    local RALPH_START="# === RALPH WIGGUM GEMINI CONFIG ==="
+    local RALPH_END="# === END RALPH WIGGUM GEMINI CONFIG ==="
 
-    log_success "Gemini config removed"
+    if [ -f "$GEMINI_CONFIG" ]; then
+        if grep -q "$RALPH_START" "$GEMINI_CONFIG" 2>/dev/null; then
+            # Remove only Ralph section
+            log_info "Removing Ralph section from Gemini config..."
+            local TEMP_FILE="${GEMINI_CONFIG}.tmp"
+            sed "/$RALPH_START/,/$RALPH_END/d" "$GEMINI_CONFIG" > "$TEMP_FILE"
+            mv "$TEMP_FILE" "$GEMINI_CONFIG"
+            log_success "Gemini config cleaned (your config preserved)"
+        else
+            log_info "No Ralph section found in Gemini config"
+        fi
+    fi
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CLEAN SHELL CONFIG
+# CLEAN SHELL CONFIG (Remove only Ralph section with markers)
 # ═══════════════════════════════════════════════════════════════════════════════
 clean_shell_config() {
     log_info "Cleaning shell configuration..."
@@ -163,25 +271,49 @@ clean_shell_config() {
         SHELL_RC="$HOME/.bashrc"
     fi
 
-    if [ -n "$SHELL_RC" ] && grep -q "# Ralph Wiggum" "$SHELL_RC" 2>/dev/null; then
-        # Create backup
+    if [ -z "$SHELL_RC" ]; then
+        log_info "No shell config found"
+        return 0
+    fi
+
+    local START_MARKER="# >>> RALPH WIGGUM START >>>"
+    local END_MARKER="# <<< RALPH WIGGUM END <<<"
+
+    # Try new marker-based removal first
+    if grep -q "$START_MARKER" "$SHELL_RC" 2>/dev/null; then
+        log_info "Removing Ralph section from shell config..."
+        local TEMP_FILE="${SHELL_RC}.ralph.tmp"
+        sed "/$START_MARKER/,/$END_MARKER/d" "$SHELL_RC" > "$TEMP_FILE"
+        mv "$TEMP_FILE" "$SHELL_RC"
+        log_success "Shell config cleaned (markers found)"
+        return 0
+    fi
+
+    # Fallback: Try old-style markers (for v2.14 and earlier)
+    if grep -q "# Ralph Wiggum" "$SHELL_RC" 2>/dev/null; then
+        log_info "Found legacy Ralph shell config, attempting removal..."
         cp "$SHELL_RC" "${SHELL_RC}.ralph-backup"
 
-        # Remove Ralph section (between the header and the end of aliases block)
-        sed -i.bak '/# ═.*Ralph Wiggum/,/^alias mmlight=/d' "$SHELL_RC" 2>/dev/null || \
-        sed -i '' '/# ═.*Ralph Wiggum/,/^alias mmlight=/d' "$SHELL_RC" 2>/dev/null || \
-        log_warn "Could not automatically remove shell aliases"
+        # Try to remove old-style block
+        local TEMP_FILE="${SHELL_RC}.ralph.tmp"
+        # Remove from "# ═.*Ralph Wiggum" to "alias mmlight" line (inclusive)
+        sed '/# ═.*Ralph Wiggum/,/^alias mmlight/d' "$SHELL_RC" > "$TEMP_FILE" 2>/dev/null && \
+            mv "$TEMP_FILE" "$SHELL_RC" && \
+            log_success "Legacy shell config removed (backup: ${SHELL_RC}.ralph-backup)" && \
+            return 0
 
-        # Also try simpler pattern
-        sed -i.bak '/# Ralph Wiggum/,/alias mmlight/d' "$SHELL_RC" 2>/dev/null || \
-        sed -i '' '/# Ralph Wiggum/,/alias mmlight/d' "$SHELL_RC" 2>/dev/null || true
+        # If that didn't work, try simpler pattern
+        sed '/# Ralph Wiggum/,/alias mmlight/d' "$SHELL_RC" > "$TEMP_FILE" 2>/dev/null && \
+            mv "$TEMP_FILE" "$SHELL_RC" && \
+            log_success "Legacy shell config removed (backup: ${SHELL_RC}.ralph-backup)" && \
+            return 0
 
-        rm -f "${SHELL_RC}.bak" 2>/dev/null || true
-
-        log_success "Shell aliases removed (backup: ${SHELL_RC}.ralph-backup)"
-    else
-        log_info "No shell aliases found to remove"
+        rm -f "$TEMP_FILE" 2>/dev/null || true
+        log_warn "Could not automatically remove shell aliases - manual cleanup may be needed"
+        return 0
     fi
+
+    log_info "No Ralph shell config found to remove"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

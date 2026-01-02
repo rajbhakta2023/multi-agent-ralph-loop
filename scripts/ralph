@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ralph - Multi-Agent Orchestrator CLI
-# Version 2.14.0
+# Version 2.16.0
 set -euo pipefail
 
-VERSION="2.14.0"
+VERSION="2.16.0"
 RALPH_DIR="${HOME}/.ralph"
 
 # SECURITY: Use mktemp for unpredictable temp directory
@@ -76,7 +76,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 # ===============================================================================
 show_help() {
     cat << 'EOF'
-ralph - Multi-Agent Orchestrator CLI v2.14.0
+ralph - Multi-Agent Orchestrator CLI v2.16.0
 
 ORCHESTRATION:
   ralph orch "task"          Full orchestration (clarify->classify->execute->validate->retrospective)
@@ -699,35 +699,55 @@ cmd_orch() {
 
     echo ""
     echo "==============================================================="
-    echo "  RALPH WIGGUM v2.14 ORCHESTRATION"
+    echo "  RALPH WIGGUM v2.16 ORCHESTRATION"
+    echo "==============================================================="
+    echo ""
+    echo "  NOTE: v2.16 uses AskUserQuestion for interactive clarification"
+    echo "        and EnterPlanMode for automatic planning."
+    echo ""
+    echo "  For best experience, use the Claude Code /orchestrator command"
+    echo "  which provides native interactive questioning."
+    echo ""
     echo "==============================================================="
     echo ""
 
-    # Step 1: Clarify
-    log_info "[1/6] CLARIFY"
+    # Step 0: Auto-Plan Mode (inform user)
+    log_info "[0/7] AUTO-PLAN MODE"
+    log_info "   Non-trivial tasks automatically enter Plan Mode in Claude Code"
+    echo ""
+
+    # Step 1: Clarify (legacy CLI mode)
+    log_info "[1/7] CLARIFY"
+    log_info "   Generating clarification questions..."
     cmd_clarify "$TASK"
     echo ""
-    read -p "Press Enter to continue after answering questions (or Ctrl+C to abort)..."
+    log_warn "   For interactive questioning, use: claude then /orchestrator"
+    read -p "Press Enter to continue after reviewing questions (or Ctrl+C to abort)..."
 
     # Step 2: Classify
-    log_info "[2/6] CLASSIFY"
+    log_info "[2/7] CLASSIFY"
     claude --print -p "Use task-classifier skill. Classify complexity (1-10) for: $TASK"
     echo ""
 
-    # Step 3: Delegate
-    log_info "[3/6] DELEGATE"
+    # Step 3: Plan
+    log_info "[3/7] PLAN"
+    log_info "   In Claude Code, this step writes a detailed plan for approval"
+    echo ""
+
+    # Step 4: Delegate
+    log_info "[4/7] DELEGATE"
     log_info "   Launching appropriate subagents..."
 
-    # Step 4: Execute
-    log_info "[4/6] EXECUTE"
+    # Step 5: Execute
+    log_info "[5/7] EXECUTE"
     cmd_parallel . false
 
-    # Step 5: Validate
-    log_info "[5/6] VALIDATE"
+    # Step 6: Validate
+    log_info "[6/7] VALIDATE"
     cmd_gates --check
 
-    # Step 6: Retrospective
-    log_info "[6/6] RETROSPECTIVE"
+    # Step 7: Retrospective
+    log_info "[7/7] RETROSPECTIVE"
     cmd_retrospective
 
     echo ""
