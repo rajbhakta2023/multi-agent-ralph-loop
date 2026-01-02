@@ -122,7 +122,7 @@ class TestBlockedPatterns:
         normalized = git_safety_guard.normalize_command(command)
         blocked, reason = git_safety_guard.check_blocked_pattern(normalized)
         assert blocked is True, f"Command '{command}' should be blocked"
-        assert expected_reason in reason.lower()
+        assert expected_reason.lower() in reason.lower()
 
 
 class TestConfirmationPatterns:
