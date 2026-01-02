@@ -30,6 +30,7 @@ USAGE:
   mmc --lightning         Use MiniMax-lightning model (faster, 60 iter)
   mmc --second-opinion    Get second opinion on previous result
   mmc --status            Show configuration status
+  mmc --stats             Show usage statistics from logs
   mmc --version           Show version
   mmc --help              Show this help
 
@@ -147,6 +148,15 @@ get_base_url() {
     jq -r '.baseUrl' "$CONFIG_FILE"
 }
 
+log_usage() {
+    local ACTION="$1"
+    local MODEL="$2"
+    local CHARS="${3:-0}"
+    local LOG_FILE="${RALPH_DIR}/logs/usage.jsonl"
+    mkdir -p "$(dirname "$LOG_FILE")"
+    echo "{\"ts\":$(date +%s),\"action\":\"$ACTION\",\"model\":\"$MODEL\",\"chars\":$CHARS}" >> "$LOG_FILE"
+}
+
 show_status() {
     echo -e "${BLUE}MiniMax Configuration Status${NC}"
     echo ""
@@ -179,6 +189,8 @@ show_status() {
 query() {
     local PROMPT="$1"
     local MODEL="${2:-MiniMax-M2.1}"
+
+    log_usage "query" "$MODEL" "${#PROMPT}"
 
     check_config
     check_dependencies
@@ -217,6 +229,8 @@ launch_claude_code() {
         MODEL="MiniMax-M2.1-lightning"
     fi
 
+    log_usage "chat" "$MODEL" "0"
+
     echo -e "${BLUE}Launching Claude Code with MiniMax backend${NC}"
     echo -e "   Model: ${GREEN}$MODEL${NC}"
     echo -e "   Small/Fast: ${GREEN}$SMALL_MODEL${NC}"
@@ -233,6 +247,8 @@ loop() {
     local MAX_ITER="${1:-30}"
     shift
     local TASK="$*"
+
+    log_usage "loop" "MiniMax-M2.1" "${#TASK}"
 
     check_config
     check_dependencies
@@ -258,6 +274,24 @@ loop() {
 
     echo -e "${YELLOW}Max iterations reached without VERIFIED_DONE${NC}"
     return 1
+}
+
+cmd_stats() {
+    local LOG_FILE="${RALPH_DIR}/logs/usage.jsonl"
+    if [[ ! -f "$LOG_FILE" ]]; then
+        echo "No usage logs found"
+        return 0
+    fi
+    echo "=== MiniMax Usage Stats ==="
+    echo "Total queries: $(wc -l < "$LOG_FILE" | tr -d ' ')"
+    echo ""
+    echo "By action:"
+    jq -r '.action' "$LOG_FILE" 2>/dev/null | sort | uniq -c | sed 's/^/  /' || echo "  (install jq for detailed stats)"
+    echo ""
+    echo "By model:"
+    jq -r '.model' "$LOG_FILE" 2>/dev/null | sort | uniq -c | sed 's/^/  /' || echo "  (install jq for detailed stats)"
+    echo ""
+    echo "Total chars processed: $(jq -s '[.[].chars] | add' "$LOG_FILE" 2>/dev/null || echo "N/A")"
 }
 
 main() {
@@ -293,6 +327,9 @@ main() {
             ;;
         --status)
             show_status
+            ;;
+        --stats)
+            cmd_stats
             ;;
         --version|-v)
             echo "mmc v$VERSION"

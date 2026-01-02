@@ -221,7 +221,17 @@ run_minimax() {
     local QUERY="$1"
     local OUTPUT="${2:-$RALPH_TMPDIR/minimax_result.json}"
 
-    if command -v mmc &> /dev/null && [ -f "${HOME}/.mmc.json" ]; then
+    # Check for MiniMax config: primary path, then legacy fallback
+    local MINIMAX_CONFIG=""
+    if [ -f "${CONFIG_DIR}/minimax.json" ]; then
+        MINIMAX_CONFIG="${CONFIG_DIR}/minimax.json"
+    elif [ -f "${RALPH_DIR}/config/minimax.json" ]; then
+        MINIMAX_CONFIG="${RALPH_DIR}/config/minimax.json"
+    elif [ -f "${HOME}/.mmc.json" ]; then
+        MINIMAX_CONFIG="${HOME}/.mmc.json"  # Legacy fallback
+    fi
+
+    if command -v mmc &> /dev/null && [ -n "$MINIMAX_CONFIG" ]; then
         mmc --query "$QUERY" > "$OUTPUT" 2>&1 &
         echo $!
     else
@@ -498,8 +508,21 @@ cmd_research() {
 cmd_minimax() {
     local QUERY="$1"
 
-    if ! command -v mmc &> /dev/null || [ ! -f "${HOME}/.mmc.json" ]; then
-        log_error "MiniMax not configured. Run: mmc --setup"
+    # Check for MiniMax config: primary path, then legacy fallback
+    local MINIMAX_CONFIG=""
+    if [ -f "${CONFIG_DIR}/minimax.json" ]; then
+        MINIMAX_CONFIG="${CONFIG_DIR}/minimax.json"
+    elif [ -f "${RALPH_DIR}/config/minimax.json" ]; then
+        MINIMAX_CONFIG="${RALPH_DIR}/config/minimax.json"
+    elif [ -f "${HOME}/.mmc.json" ]; then
+        MINIMAX_CONFIG="${HOME}/.mmc.json"  # Legacy fallback
+    fi
+
+    if ! command -v mmc &> /dev/null || [ -z "$MINIMAX_CONFIG" ]; then
+        log_error "MiniMax not configured."
+        log_info "   Expected config at: ${CONFIG_DIR}/minimax.json"
+        log_info "   Or legacy path: ~/.mmc.json"
+        log_info "   Run: mmc --setup"
         return 1
     fi
 
