@@ -1,0 +1,17 @@
+{
+  "version": "2.26.0",
+  "created_at": "2026-01-04T00:00:00Z",
+  "updated_at": "2026-01-04T00:00:00Z",
+  "session_id": null,
+  "project": "multi-agent-ralph-loop",
+  "tasks": [],
+  "convoys": [],
+  "statistics": {
+    "total_tasks": 0,
+    "completed_tasks": 0,
+    "pending_tasks": 0,
+    "blocked_tasks": 0,
+    "in_progress_tasks": 0,
+    "completion_rate": 0
+  }
+}

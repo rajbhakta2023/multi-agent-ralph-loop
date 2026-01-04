@@ -1,0 +1,176 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Ralph Task Persistence Schema",
+  "description": "Schema for persistent task tracking in multi-agent Ralph loop (v2.26)",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Schema version",
+      "const": "2.26.0"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When this task file was created"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Last update timestamp"
+    },
+    "session_id": {
+      "type": ["string", "null"],
+      "description": "Current session identifier",
+      "maxLength": 100,
+      "pattern": "^[a-zA-Z0-9._-]*$"
+    },
+    "project": {
+      "type": "string",
+      "description": "Project path or name",
+      "maxLength": 500,
+      "pattern": "^[a-zA-Z0-9._/-]+$"
+    },
+    "tasks": {
+      "type": "array",
+      "description": "List of tasks",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Task ID (1-indexed)"
+          },
+          "content": {
+            "type": "string",
+            "description": "Task description",
+            "maxLength": 2000,
+            "pattern": "^[^<>{}$`]*$"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "in_progress", "completed", "blocked", "failed"],
+            "description": "Task status"
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low"],
+            "description": "Task priority"
+          },
+          "assigned_agent": {
+            "type": "string",
+            "description": "Agent assigned to this task (e.g., 'claude-opus', 'codex', 'minimax')"
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "description": "Task IDs that must complete before this task"
+          },
+          "blocked_by": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "description": "Currently blocking task IDs"
+          },
+          "comments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "timestamp": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "agent": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string",
+                  "maxLength": 5000,
+                  "pattern": "^[^<>{}$`]*$"
+                }
+              }
+            },
+            "description": "Progress comments from agents"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "iteration_count": {
+            "type": "integer",
+            "description": "Number of iterations on this task"
+          },
+          "max_iterations": {
+            "type": "integer",
+            "description": "Maximum iterations allowed (15 for Claude, 30 for MiniMax)"
+          }
+        },
+        "required": ["id", "content", "status"]
+      }
+    },
+    "convoys": {
+      "type": "array",
+      "description": "Work tracking across agents (Gastown pattern)",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Convoy identifier"
+          },
+          "name": {
+            "type": "string",
+            "description": "Convoy name/description"
+          },
+          "task_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "description": "Tasks in this convoy"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active", "completed", "stalled"]
+          }
+        }
+      }
+    },
+    "statistics": {
+      "type": "object",
+      "properties": {
+        "total_tasks": {
+          "type": "integer"
+        },
+        "completed_tasks": {
+          "type": "integer"
+        },
+        "pending_tasks": {
+          "type": "integer"
+        },
+        "blocked_tasks": {
+          "type": "integer"
+        },
+        "in_progress_tasks": {
+          "type": "integer"
+        },
+        "completion_rate": {
+          "type": "number"
+        }
+      }
+    }
+  },
+  "required": ["version", "tasks"]
+}
