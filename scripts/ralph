@@ -168,6 +168,72 @@ validate_text_input() {
     printf '%s' "$input"
 }
 
+is_codex_only() {
+    case "${RALPH_CODEX_ONLY:-1}" in
+        1|true|yes|on) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+build_acfs_context() {
+    local context=""
+
+    if command -v bd >/dev/null 2>&1; then
+        local beads_json
+        beads_json=$(bd ready --json --limit 20 2>/dev/null || true)
+        if [ -n "$beads_json" ]; then
+            context="${context}"$'\n'"Beads ready (json):"$'\n'"${beads_json}"
+        fi
+    fi
+
+    if command -v ubs >/dev/null 2>&1; then
+        context="${context}"$'\n'"UBS: available (run ubs --staged or ubs --diff before commit)."
+    fi
+
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        local git_status
+        git_status=$(git status -sb 2>/dev/null || true)
+        if [ -n "$git_status" ]; then
+            context="${context}"$'\n'"Git status:"$'\n'"${git_status}"
+        fi
+    fi
+
+    printf '%s' "$context"
+}
+
+run_ubs_guard() {
+    if ! command -v ubs >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local changes
+    changes=$(git status --porcelain 2>/dev/null || true)
+    if [ -z "$changes" ]; then
+        log_info "UBS: no working tree changes detected"
+        return 0
+    fi
+
+    local ubs_cmd="ubs --diff"
+    if ! git diff --cached --quiet 2>/dev/null; then
+        ubs_cmd="ubs --staged"
+    fi
+    if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
+        ubs_cmd="ubs ."
+    fi
+
+    log_info "UBS: running $ubs_cmd"
+    if ! $ubs_cmd; then
+        log_warn "UBS reported findings; fix and rerun before VERIFIED_DONE."
+        return 1
+    fi
+
+    return 0
+}
+
 # SECURITY: Escape string for safe shell usage (VULN-001 FIX)
 # v2.19: Use printf %q for proper escaping (prevents command substitution)
 escape_for_shell() {
@@ -219,17 +285,21 @@ CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 NC='\033[0m'
 
-# Iteration Limits (v2.32 - Extended for real-world usage)
+# Codex-only mode (ACFS-friendly defaults)
+RALPH_CODEX_ONLY="${RALPH_CODEX_ONLY:-1}"
+CODEX_MAX_ITER="${RALPH_CODEX_MAX_ITER:-20}"
+
+# Iteration Limits (legacy)
 CLAUDE_MAX_ITER=25        # +10 iterations from v2.31 (was 15)
 MINIMAX_MAX_ITER=50       # +20 iterations from v2.31 (was 30)
 LIGHTNING_MAX_ITER=100    # +40 iterations from v2.31 (was 60)
 
 # Model Configuration by Task Type (v2.21)
 # Based on efficiency analysis: quality > speed > rework > context
-EXPLORATION_MODEL="minimax"     # Research, exploration, docs - 1M context, 8% cost
-IMPLEMENTATION_MODEL="sonnet"   # Features, refactors, tests - balanced quality/speed
-REVIEW_MODEL="opus"             # Pre-merge critical review - surgical precision
-VALIDATION_MODEL="minimax"      # Second opinion, parallel review - Opus quality at 8% cost
+EXPLORATION_MODEL="codex"
+IMPLEMENTATION_MODEL="codex"
+REVIEW_MODEL="codex"
+VALIDATION_MODEL="codex"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TOOL VALIDATION (v2.22)
@@ -237,7 +307,7 @@ VALIDATION_MODEL="minimax"      # Second opinion, parallel review - Opus quality
 
 # Herramientas críticas - requeridas siempre
 CRITICAL_TOOLS=(
-    "claude:Claude Code CLI:brew install anthropic/tap/claude-code"
+    "codex:Codex CLI (primary runtime):npm i -g @openai/codex"
     "jq:JSON processor:brew install jq"
     "git:Version control:brew install git"
 )
@@ -246,13 +316,16 @@ CRITICAL_TOOLS=(
 FEATURE_TOOLS=(
     "wt:WorkTrunk (git worktree):brew install max-sixty/worktrunk/wt"
     "gh:GitHub CLI (PR workflow):brew install gh && gh auth login"
-    "mmc:MiniMax CLI (second opinion):ralph self-update && mmc --setup"
-    "codex:Codex CLI (reviews/automation):npm i -g @openai/codex"
-    "gemini:Gemini CLI (research):pip install google-gemini-cli"
     "sg:ast-grep (structural code search):brew install ast-grep"
     "memvid:Memvid memory (v2.31):pip install memvid && npm install @memvid/sdk"
     "tldr:LLM-TLDR (95% token savings v2.37):pip install llm-tldr"
 )
+
+if [ "${RALPH_CODEX_ONLY}" != "1" ]; then
+    CRITICAL_TOOLS+=("claude:Claude Code CLI:brew install anthropic/tap/claude-code")
+    FEATURE_TOOLS+=("mmc:MiniMax CLI (second opinion):ralph self-update && mmc --setup")
+    FEATURE_TOOLS+=("gemini:Gemini CLI (research):pip install google-gemini-cli")
+fi
 
 # Herramientas para Quality Gates (9 lenguajes)
 QUALITY_GATE_TOOLS=(
@@ -944,6 +1017,85 @@ EOF
     CODEX_PID=$!
 }
 
+run_codex_integration() {
+    local FILES
+    FILES=$(validate_path "$1")
+    local OUTPUT="$RALPH_TMPDIR/codex_integration.txt"
+    local SAFE_FILES
+    SAFE_FILES=$(escape_for_shell "$FILES")
+
+    log_info "Running Codex integration test generation (workspace-write sandbox)" >&2
+
+    codex exec \
+        --profile unit-tests \
+        --full-auto \
+        -C "$(safe_realpath "$FILES")" \
+        "$(cat <<EOF
+Generate integration tests for the target:
+- Focus on cross-module flows and API boundaries
+- Include error paths and retry behavior
+- Provide suggested test file paths and content
+
+Target: ${SAFE_FILES}
+EOF
+        )" \
+        > "$OUTPUT" 2>&1 &
+
+    CODEX_PID=$!
+}
+
+run_codex_review() {
+    local FILES
+    FILES=$(validate_path "$1")
+    local OUTPUT="$RALPH_TMPDIR/codex_review.txt"
+    local SAFE_FILES
+    SAFE_FILES=$(escape_for_shell "$FILES")
+
+    log_info "Running Codex review (code-review profile)" >&2
+
+    codex exec \
+        --profile code-review \
+        -C "$(safe_realpath "$FILES")" \
+        "$(cat <<EOF
+Review the target code for correctness, reliability, and maintainability.
+Focus on edge cases, data validation, and clarity. Provide a concise bullet list
+of risks and suggested fixes.
+
+Target: ${SAFE_FILES}
+EOF
+        )" \
+        > "$OUTPUT" 2>&1 &
+
+    CODEX_PID=$!
+}
+
+run_codex_refactor() {
+    local FILES
+    FILES=$(validate_path "$1")
+    local OUTPUT="$RALPH_TMPDIR/codex_refactor.txt"
+    local SAFE_FILES
+    SAFE_FILES=$(escape_for_shell "$FILES")
+
+    log_info "Running Codex refactor pass (code-review profile)" >&2
+
+    codex exec \
+        --profile code-review \
+        -C "$(safe_realpath "$FILES")" \
+        "$(cat <<EOF
+Refactor the target for clarity and maintainability:
+- Reduce duplication
+- Simplify conditionals
+- Extract obvious helpers
+- Avoid unnecessary abstractions
+
+Target: ${SAFE_FILES}
+EOF
+        )" \
+        > "$OUTPUT" 2>&1 &
+
+    CODEX_PID=$!
+}
+
 # ===============================================================================
 # GEMINI SUBAGENTS
 # ===============================================================================
@@ -1124,7 +1276,7 @@ cmd_parallel() {
     local ASYNC="${2:-false}"
 
     ensure_tmp
-    log_info "Launching 6 parallel subagents for: $TARGET"
+    log_info "Launching 6 Codex subagents for: $TARGET"
     echo ""
 
     declare -a PIDS
@@ -1147,24 +1299,23 @@ cmd_parallel() {
     PIDS+=("$PID")
     log_info "  [3/6] Codex Unit Tests: PID $PID"
 
-    # 4. Gemini Integration
-    PID=$(run_gemini_integration "$TARGET")
+    # 4. Codex Integration
+    run_codex_integration "$TARGET"
+    PID=$CODEX_PID
     PIDS+=("$PID")
-    log_info "  [4/6] Gemini Integration: PID $PID"
+    log_info "  [4/6] Codex Integration: PID $PID"
 
-    # 5. Gemini Research
-    PID=$(run_gemini_research "code quality best practices for $TARGET")
+    # 5. Codex Refactor Pass
+    run_codex_refactor "$TARGET"
+    PID=$CODEX_PID
     PIDS+=("$PID")
-    log_info "  [5/6] Gemini Research: PID $PID"
+    log_info "  [5/6] Codex Refactor: PID $PID"
 
-    # 6. MiniMax Second Opinion
-    PID=$(run_minimax "Provide critical code review for: $TARGET")
-    if [ "$PID" != "0" ]; then
-        PIDS+=("$PID")
-        log_info "  [6/6] MiniMax Review: PID $PID"
-    else
-        log_warn "  [6/6] MiniMax: skipped (not configured)"
-    fi
+    # 6. Codex Review
+    run_codex_review "$TARGET"
+    PID=$CODEX_PID
+    PIDS+=("$PID")
+    log_info "  [6/6] Codex Review: PID $PID"
 
     echo ""
 
@@ -1860,7 +2011,8 @@ cmd_integration() {
     ensure_tmp
 
     log_info "Generating integration tests for: $TARGET"
-    PID=$(run_gemini_integration "$TARGET")
+    run_codex_integration "$TARGET"
+    PID=$CODEX_PID
     wait $PID
     log_success "Integration test generation complete."
 }
@@ -1883,15 +2035,14 @@ cmd_refactor() {
 }
 
 cmd_research() {
-    # v2.25: WebSearch (native, FREE) → MiniMax MCP (8% fallback)
-    # NO usar Gemini para research (muy costoso)
+    # Codex-only research (no web tools)
     local QUERY
     QUERY=$(validate_text_input "$1")
 
     if [ -z "$QUERY" ]; then
         echo ""
         echo "╔═══════════════════════════════════════════════════════════════╗"
-        echo "║  RESEARCH: Web Search with Smart Fallback (v2.25)             ║"
+        echo "║  RESEARCH: Codex-only (no web tools)                          ║"
         echo "╠═══════════════════════════════════════════════════════════════╣"
         echo "║                                                               ║"
         echo "║  Usage: ralph research \"<query>\"                              ║"
@@ -1901,31 +2052,25 @@ cmd_research() {
         echo "║    ralph research \"TypeScript best practices\"                 ║"
         echo "║    ralph research \"Docker security hardening\"                 ║"
         echo "║                                                               ║"
-        echo "║  Hierarchy: WebSearch (FREE) → MiniMax MCP (8% fallback)      ║"
+        echo "║  Note: Uses best-effort reasoning only                         ║"
         echo "╚═══════════════════════════════════════════════════════════════╝"
         exit 1
     fi
 
-    log_info "Research: $QUERY (WebSearch → MiniMax fallback)"
+    log_info "Research: $QUERY (Codex-only)"
 
-    # v2.25: Use Claude with WebSearch native tool, fallback to MiniMax MCP
-    claude --print "$(cat <<PROMPT_EOF
-Research the following query using this priority:
+    codex exec --profile code-review "$(cat <<PROMPT_EOF
+Provide a best-effort answer from your existing knowledge (no web tools).
 
-1. FIRST: Use the WebSearch tool (native Claude tool, free)
-2. FALLBACK: If WebSearch fails or returns no results, use mcp__MiniMax__web_search (8% cost)
-
-IMPORTANT: Do NOT use Gemini CLI - it's too expensive for research tasks.
-
-Query to research:
+Query:
 """
 $QUERY
 """
 
-Return results as markdown with:
-- Summary of findings
-- Key sources (with clickable links)
-- Relevant code examples if applicable
+Return markdown with:
+- Short summary
+- Key points
+- Any relevant code examples
 PROMPT_EOF
 )"
 }
@@ -1935,14 +2080,14 @@ PROMPT_EOF
 # ===============================================================================
 
 cmd_library() {
-    # v2.25: Context7 MCP for library/framework documentation
+    # Codex-only library lookup (no Context7)
     local QUERY
     QUERY=$(validate_text_input "${1:-}")
 
     if [ -z "$QUERY" ]; then
         echo ""
         echo "╔═══════════════════════════════════════════════════════════════╗"
-        echo "║  CONTEXT7: Library Documentation Search (v2.25)               ║"
+        echo "║  LIBRARY: Codex-only documentation lookup                     ║"
         echo "╠═══════════════════════════════════════════════════════════════╣"
         echo "║                                                               ║"
         echo "║  Usage: ralph library \"<library-name> <query>\"                ║"
@@ -1953,35 +2098,25 @@ cmd_library() {
         echo "║    ralph library \"TypeScript generic constraints\"             ║"
         echo "║    ralph library \"Tailwind CSS flexbox utilities\"             ║"
         echo "║                                                               ║"
-        echo "║  Cost: Optimized (indexed docs reduce token usage)            ║"
-        echo "║  Fallback: MiniMax MCP if library not in Context7             ║"
+        echo "║  Note: Uses best-effort memory, no Context7                    ║"
         echo "╚═══════════════════════════════════════════════════════════════╝"
         exit 1
     fi
 
-    log_info "Context7 Library Search: $QUERY"
+    log_info "Library lookup: $QUERY (Codex-only)"
 
-    claude --print "$(cat <<PROMPT_EOF
-Search for library/framework documentation using Context7 MCP:
-
-1. FIRST: Use mcp__plugin_context7_context7__resolve-library-id to find the library
-   - Extract the library name from the query (e.g., "React", "Next.js", "TypeScript")
-   - Pass the full query for relevance ranking
-
-2. THEN: Use mcp__plugin_context7_context7__query-docs with the resolved library ID
-   - Query the specific question from the user
-
-3. FALLBACK: If Context7 doesn't have the library, use mcp__MiniMax__web_search
+    codex exec --profile code-review "$(cat <<PROMPT_EOF
+Provide a best-effort documentation summary for the query using existing knowledge.
 
 Query:
 """
 $QUERY
 """
 
-Return documentation excerpts with:
-- Code examples from official docs
-- API references if applicable
-- Best practices and recommendations
+Return:
+- Key API notes
+- Example usage
+- Common pitfalls
 PROMPT_EOF
 )"
 }
@@ -2017,6 +2152,11 @@ cmd_browse() {
         echo "║  Benchmark: 17% faster, 39% cheaper than Playwright MCP       ║"
         echo "╚═══════════════════════════════════════════════════════════════╝"
         exit 1
+    fi
+
+    if is_codex_only; then
+        log_warn "Codex-only mode: dev-browser requires Claude skills; disabled."
+        return 1
     fi
 
     # Validate URL format (basic check)
@@ -2101,7 +2241,7 @@ cmd_websearch() {
     if [ -z "$QUERY" ]; then
         echo ""
         echo "╔═══════════════════════════════════════════════════════════════╗"
-        echo "║  MINIMAX WEB SEARCH: MCP-Powered Research (v2.24)             ║"
+        echo "║  WEB SEARCH: MiniMax MCP (disabled in codex-only mode)        ║"
         echo "╠═══════════════════════════════════════════════════════════════╣"
         echo "║                                                               ║"
         echo "║  Usage: ralph websearch \"<query>\"                             ║"
@@ -2119,6 +2259,12 @@ cmd_websearch() {
         echo "║  Cost: ~8% of Gemini CLI (74% SWE-bench quality)              ║"
         echo "╚═══════════════════════════════════════════════════════════════╝"
         exit 1
+    fi
+
+    if is_codex_only; then
+        log_warn "Codex-only mode: websearch disabled. Falling back to codex-only research."
+        cmd_research "$QUERY"
+        return 0
     fi
 
     log_info "MiniMax Web Search: $QUERY"
@@ -2183,6 +2329,11 @@ cmd_image() {
         echo "║  Note: Paths starting with @ are stripped automatically       ║"
         echo "╚═══════════════════════════════════════════════════════════════╝"
         exit 1
+    fi
+
+    if is_codex_only; then
+        log_warn "Codex-only mode: image analysis requires MiniMax MCP; disabled."
+        return 1
     fi
 
     # Validate image source
@@ -3782,23 +3933,43 @@ cmd_audit() {
     local SAFE_TARGET
     SAFE_TARGET=$(escape_for_shell "$TARGET")
 
-    claude --print -p "You are the Quality-Auditor agent.
+    if is_codex_only; then
+        codex exec --profile code-review "You are the Quality-Auditor agent.
 
-    Target: $SAFE_TARGET
+        Target: $SAFE_TARGET
 
-    Perform 6-phase pragmatic audit:
-    1. Quick Scan (30s) - Surface issues
-    2. Correctness Check - Logic errors
-    3. Security Sweep - OWASP Top 10
-    4. Simplicity Pass - YAGNI/complexity
-    5. Test Review - Coverage gaps
-    6. Performance Spot-Check - Obvious bottlenecks
+        Perform 6-phase pragmatic audit:
+        1. Quick Scan (30s) - Surface issues
+        2. Correctness Check - Logic errors
+        3. Security Sweep - OWASP Top 10
+        4. Simplicity Pass - YAGNI/complexity
+        5. Test Review - Coverage gaps
+        6. Performance Spot-Check - Obvious bottlenecks
 
-    Output format:
-    - Risk Level: 🔴 High / 🟡 Medium / 🟢 Low
-    - Ship Recommendation: ✓ Ship | ⚠ Fix First | ✗ Rework
-    - Top 3 issues to fix
-    - Time estimate for fixes"
+        Output format:
+        - Risk Level: 🔴 High / 🟡 Medium / 🟢 Low
+        - Ship Recommendation: ✓ Ship | ⚠ Fix First | ✗ Rework
+        - Top 3 issues to fix
+        - Time estimate for fixes"
+    else
+        claude --print -p "You are the Quality-Auditor agent.
+
+        Target: $SAFE_TARGET
+
+        Perform 6-phase pragmatic audit:
+        1. Quick Scan (30s) - Surface issues
+        2. Correctness Check - Logic errors
+        3. Security Sweep - OWASP Top 10
+        4. Simplicity Pass - YAGNI/complexity
+        5. Test Review - Coverage gaps
+        6. Performance Spot-Check - Obvious bottlenecks
+
+        Output format:
+        - Risk Level: 🔴 High / 🟡 Medium / 🟢 Low
+        - Ship Recommendation: ✓ Ship | ⚠ Fix First | ✗ Rework
+        - Top 3 issues to fix
+        - Time estimate for fixes"
+    fi
 }
 
 # ===============================================================================
@@ -3825,21 +3996,25 @@ cmd_adversarial_plan() {
     log_info "Found $TOTAL_STEPS steps to validate"
     echo ""
 
-    log_info "Phase 1: Claude Opus Review..."
-    echo ""
+    if is_codex_only; then
+        log_warn "Codex-only mode: skipping Claude Opus review phase"
+    else
+        log_info "Phase 1: Claude Opus Review..."
+        echo ""
 
-    claude --print -m opus -p "You are performing adversarial plan validation.
+        claude --print -m opus -p "You are performing adversarial plan validation.
 
-    Read the plan state from .claude/plan-state.json.
+        Read the plan state from .claude/plan-state.json.
 
-    For EACH step:
-    1. Verify the file exists at the specified path
-    2. Verify all exports match the spec
-    3. Verify function signatures match
-    4. Check for unresolved drift
+        For EACH step:
+        1. Verify the file exists at the specified path
+        2. Verify all exports match the spec
+        3. Verify function signatures match
+        4. Check for unresolved drift
 
-    Output a coverage percentage and list of issues found.
-    Be STRICT - if spec says X, code must have X exactly."
+        Output a coverage percentage and list of issues found.
+        Be STRICT - if spec says X, code must have X exactly."
+    fi
 
     echo ""
     log_info "Phase 2: Codex GPT-5.2 Review..."
@@ -5053,10 +5228,16 @@ Multi-agent review will be posted as comments.
     local DIFF_FILE="$RALPH_TMPDIR/pr_diff.txt"
     gh pr diff "$PR_NUMBER" > "$DIFF_FILE" 2>/dev/null || git diff main..."$BRANCH" > "$DIFF_FILE"
 
-    # Claude Opus Review
-    log_info "   [1/2] Claude Opus reviewing..."
-    local CLAUDE_REVIEW
-    CLAUDE_REVIEW=$(cat "$DIFF_FILE" | claude --print -m opus -p "Review this code diff for:
+    local TOTAL_REVIEWERS=2
+    if is_codex_only; then
+        TOTAL_REVIEWERS=1
+    fi
+
+    local CLAUDE_REVIEW=""
+    if ! is_codex_only; then
+        # Claude Opus Review
+        log_info "   [1/${TOTAL_REVIEWERS}] Claude Opus reviewing..."
+        CLAUDE_REVIEW=$(cat "$DIFF_FILE" | claude --print -m opus -p "Review this code diff for:
 - Logic errors and edge cases
 - Code quality and maintainability
 - Potential bugs
@@ -5077,15 +5258,16 @@ Output format:
 If no major issues: 'APPROVED ✅'
 If blocking issues: 'BLOCKED ❌ - [reason]'" 2>&1 || echo "Claude review failed")
 
-    # Post Claude review as comment
-    if [ -n "$CLAUDE_REVIEW" ] && [ "$CLAUDE_REVIEW" != "Claude review failed" ]; then
-        gh pr comment "$PR_NUMBER" --body "$CLAUDE_REVIEW" 2>/dev/null || log_warn "Failed to post Claude review"
-        log_success "   Claude review posted"
+        # Post Claude review as comment
+        if [ -n "$CLAUDE_REVIEW" ] && [ "$CLAUDE_REVIEW" != "Claude review failed" ]; then
+            gh pr comment "$PR_NUMBER" --body "$CLAUDE_REVIEW" 2>/dev/null || log_warn "Failed to post Claude review"
+            log_success "   Claude review posted"
+        fi
     fi
 
     # Codex GPT-5 Review
-    log_info "   [2/2] Codex GPT-5 reviewing..."
-    local CODEX_REVIEW
+    local CODEX_REVIEW=""
+    log_info "   [${TOTAL_REVIEWERS}/${TOTAL_REVIEWERS}] Codex GPT-5 reviewing..."
     if command -v codex &> /dev/null; then
         CODEX_REVIEW=$(codex exec -m gpt-5 --reasoning high -C "$(pwd)" \
             "Review this code diff for security vulnerabilities, performance issues, and best practices.
@@ -5123,18 +5305,24 @@ If blocking issues: 'BLOCKED ❌ - [reason]'" 2>&1 || echo "Claude review failed
 
     # Check for blockers
     local HAS_BLOCKER=false
-    if echo "$CLAUDE_REVIEW" | grep -qiE "(BLOCKED|BLOCKER|CRITICAL)"; then
-        HAS_BLOCKER=true
-        log_warn "  Claude found blocking issues"
-    else
-        log_success "  Claude: APPROVED"
+    if ! is_codex_only; then
+        if [ -n "$CLAUDE_REVIEW" ] && echo "$CLAUDE_REVIEW" | grep -qiE "(BLOCKED|BLOCKER|CRITICAL)"; then
+            HAS_BLOCKER=true
+            log_warn "  Claude found blocking issues"
+        elif [ -n "$CLAUDE_REVIEW" ]; then
+            log_success "  Claude: APPROVED"
+        else
+            log_warn "  Claude: SKIPPED"
+        fi
     fi
 
-    if echo "$CODEX_REVIEW" | grep -qiE "(BLOCKED|BLOCKER|CRITICAL)"; then
+    if [ -n "$CODEX_REVIEW" ] && echo "$CODEX_REVIEW" | grep -qiE "(BLOCKED|BLOCKER|CRITICAL)"; then
         HAS_BLOCKER=true
         log_warn "  Codex found blocking issues"
-    else
+    elif [ -n "$CODEX_REVIEW" ]; then
         log_success "  Codex: APPROVED"
+    else
+        log_warn "  Codex: SKIPPED"
     fi
 
     echo ""
@@ -6251,13 +6439,24 @@ cmd_integrations() {
     # Core tools (REQUIRED)
     log_info "REQUIRED TOOLS:"
 
-    # Claude CLI
-    if command -v claude &> /dev/null; then
-        local CLAUDE_VER
-        CLAUDE_VER=$(claude --version 2>&1 | head -1 || echo "unknown")
-        log_success "  Claude CLI:     $CLAUDE_VER"
+    # Codex CLI (primary runtime)
+    if command -v codex &> /dev/null; then
+        local CODEX_VER
+        CODEX_VER=$(codex --version 2>&1 | head -1 || echo "installed")
+        log_success "  Codex CLI:      $CODEX_VER"
     else
-        log_error "  Claude CLI:     NOT INSTALLED"
+        log_error "  Codex CLI:      NOT INSTALLED (npm i -g @openai/codex)"
+    fi
+
+    # Claude CLI (required only when not codex-only)
+    if ! is_codex_only; then
+        if command -v claude &> /dev/null; then
+            local CLAUDE_VER
+            CLAUDE_VER=$(claude --version 2>&1 | head -1 || echo "unknown")
+            log_success "  Claude CLI:     $CLAUDE_VER"
+        else
+            log_error "  Claude CLI:     NOT INSTALLED"
+        fi
     fi
 
     # GitHub CLI
@@ -6290,29 +6489,26 @@ cmd_integrations() {
     echo ""
     log_info "OPTIONAL AI TOOLS:"
 
-    # Codex CLI
-    if command -v codex &> /dev/null; then
-        local CODEX_VER
-        CODEX_VER=$(codex --version 2>&1 | head -1 || echo "installed")
-        log_success "  Codex CLI:      $CODEX_VER"
-    else
-        log_warn "  Codex CLI:      not installed (npm i -g @openai/codex)"
+    if is_codex_only; then
+        log_info "  Claude/Gemini/MiniMax: disabled (codex-only mode)"
     fi
 
-    # Gemini CLI
-    if command -v gemini &> /dev/null; then
-        log_success "  Gemini CLI:     installed"
-    else
-        log_warn "  Gemini CLI:     not installed"
-    fi
+    if ! is_codex_only; then
+        # Gemini CLI
+        if command -v gemini &> /dev/null; then
+            log_success "  Gemini CLI:     installed"
+        else
+            log_warn "  Gemini CLI:     not installed"
+        fi
 
-    # MiniMax (mmc)
-    if command -v mmc &> /dev/null; then
-        local MMC_VER
-        MMC_VER=$(mmc --version 2>&1 | head -1 || echo "installed")
-        log_success "  MiniMax (mmc):  $MMC_VER"
-    else
-        log_warn "  MiniMax (mmc):  not installed"
+        # MiniMax (mmc)
+        if command -v mmc &> /dev/null; then
+            local MMC_VER
+            MMC_VER=$(mmc --version 2>&1 | head -1 || echo "installed")
+            log_success "  MiniMax (mmc):  $MMC_VER"
+        else
+            log_warn "  MiniMax (mmc):  not installed"
+        fi
     fi
 
     # LLM-TLDR (v2.37)
@@ -6322,6 +6518,21 @@ cmd_integrations() {
         log_success "  LLM-TLDR:       v$TLDR_VER (95% token savings)"
     else
         log_warn "  LLM-TLDR:       not installed (pip install llm-tldr)"
+    fi
+
+    echo ""
+    log_info "ACFS TOOLS:"
+
+    if command -v bd &> /dev/null; then
+        log_success "  bd:             installed"
+    else
+        log_warn "  bd:             not installed"
+    fi
+
+    if command -v ubs &> /dev/null; then
+        log_success "  ubs:            installed"
+    else
+        log_warn "  ubs:            not installed"
     fi
 
     echo ""
@@ -6372,6 +6583,11 @@ cmd_integrations() {
 
 cmd_minimax() {
     # v2.22: Require mmc tool
+    if is_codex_only; then
+        log_warn "Codex-only mode: MiniMax disabled."
+        return 1
+    fi
+
     require_tool "mmc" "MiniMax second opinion"
 
     local QUERY
@@ -6410,12 +6626,14 @@ cmd_clarify() {
     log_info "Generating clarification questions for: $TASK"
     echo ""
 
-    # Use Claude with the skill
-    claude --print -p "Use the ask-questions-if-underspecified skill.
+    codex exec --profile code-review "$(cat <<PROMPT_EOF
+Generate clarification questions for the task below.
+Return two sections: MUST_HAVE and NICE_TO_HAVE.
 
-                       Task: ${SAFE_TASK}
-
-                       Generate MUST_HAVE and NICE_TO_HAVE questions."
+Task:
+${SAFE_TASK}
+PROMPT_EOF
+)"
 }
 
 # ===============================================================================
@@ -6424,20 +6642,16 @@ cmd_clarify() {
 cmd_loop() {
     local TASK
     TASK=$(validate_text_input "$1")
-    local USE_MINIMAX="${2:-false}"
-    local MAX_ITER=$CLAUDE_MAX_ITER
     local SAFE_TASK
     SAFE_TASK=$(escape_for_shell "$TASK")
+    local MAX_ITER=$CODEX_MAX_ITER
 
-    if [ "$USE_MINIMAX" = "--mmc" ] || [ "$USE_MINIMAX" = "--minimax" ]; then
-        MAX_ITER=$MINIMAX_MAX_ITER
-        log_info "Starting Ralph loop with MiniMax ($MAX_ITER iterations max)"
-    elif [ "$USE_MINIMAX" = "--lightning" ]; then
-        MAX_ITER=$LIGHTNING_MAX_ITER
-        log_info "Starting Ralph loop with Lightning ($MAX_ITER iterations max)"
-    else
-        log_info "Starting Ralph loop with Claude ($MAX_ITER iterations max)"
+    if [ -z "$TASK" ]; then
+        log_error "Usage: ralph loop \"<task>\""
+        return 1
     fi
+
+    log_info "Starting Ralph loop with Codex ($MAX_ITER iterations max)"
 
     log_info "   Task: $TASK"
     echo ""
@@ -6447,15 +6661,34 @@ cmd_loop() {
         ITER=$((ITER + 1))
         log_info "  Iteration $ITER/$MAX_ITER"
 
-        # Execute task
-        if [ "$USE_MINIMAX" = "--mmc" ] || [ "$USE_MINIMAX" = "--minimax" ]; then
-            RESULT=$(mmc --query "${SAFE_TASK}. Check if complete, output VERIFIED_DONE if done." 2>&1)
-        else
-            RESULT=$(claude --print -p "${SAFE_TASK}. Check if complete, output VERIFIED_DONE if done." 2>&1)
-        fi
+        local ACFS_CONTEXT
+        ACFS_CONTEXT=$(build_acfs_context)
+
+        local PROMPT
+        PROMPT=$(cat <<PROMPT_EOF
+You are Codex running in ACFS mode. Use the ACFS toolchain when relevant:
+- Use bd to claim/update/close beads.
+- Run ubs before declaring VERIFIED_DONE.
+- Prefer small, safe edits with clear reasoning.
+
+Task:
+${SAFE_TASK}
+
+Context:
+${ACFS_CONTEXT}
+
+If all work and checks are complete, output VERIFIED_DONE.
+PROMPT_EOF
+)
+
+        RESULT=$(codex exec --profile code-review "$PROMPT" 2>&1)
 
         # Check for completion
         if echo "$RESULT" | grep -q "VERIFIED_DONE"; then
+            if ! run_ubs_guard; then
+                log_warn "UBS guard failed; continuing loop."
+                continue
+            fi
             log_success "Task completed at iteration $ITER"
             return 0
         fi
@@ -6489,7 +6722,34 @@ cmd_retrospective() {
     fi
 
     local RETRO_OUTPUT
-    RETRO_OUTPUT=$(claude --print -p "Use the retrospective skill.
+    if is_codex_only; then
+        RETRO_OUTPUT=$(codex exec --profile code-review "$(cat <<PROMPT_EOF
+You are a retrospective assistant. Analyze the last task completed and propose improvements to the Ralph Wiggum system.
+
+Categories to analyze:
+1. Routing effectiveness (was complexity accurate?)
+2. Clarification quality (right questions asked?)
+3. Agent performance (which were useful?)
+4. Quality gate effectiveness
+5. Iteration efficiency
+
+Output improvement proposals with:
+- Type (routing_adjustment, clarification_enhancement, agent_behavior, new_command, delegation_update, quality_gate)
+- File to modify (use paths relative to the repo root)
+- Specific change
+- Justification
+- Risk level
+
+IMPORTANT: Format output as a complete RETROSPECTIVE.md file with:
+- Date header
+- Task summary
+- What went well
+- Improvement opportunities
+- Proposed changes in JSON format
+PROMPT_EOF
+)" 2>&1)
+    else
+        RETRO_OUTPUT=$(claude --print -p "Use the retrospective skill.
 
                        Analyze the last task completed and propose improvements to the Ralph Wiggum system.
 
@@ -6513,6 +6773,7 @@ cmd_retrospective() {
                        - What went well
                        - Improvement opportunities
                        - Proposed changes in JSON format")
+    fi
 
     echo "$RETRO_OUTPUT"
 
@@ -6595,6 +6856,13 @@ cmd_orch() {
     echo "    • Automatic plan-state.json creation"
     echo "    • Plan-Sync drift detection"
     echo "    • Adversarial plan validation"
+    if is_codex_only; then
+        echo "  Codex-only mode: uses Codex for analysis and skips Claude-only tools."
+    else
+        echo ""
+        echo "  For best experience, use the Claude Code /orchestrator command"
+        echo "  which provides native interactive questioning."
+    fi
     echo ""
     echo "==============================================================="
     echo ""
@@ -6602,12 +6870,18 @@ cmd_orch() {
     local COMPLEXITY=5
     local MODEL="sonnet"
     local WORKTREE_PATH=""
+    if is_codex_only; then
+        MODEL="codex"
+    fi
 
     # =========================================================================
     # Step 0: EVALUATE
     # =========================================================================
     log_info "[0/12] EVALUATE - Quick complexity assessment"
     echo "   Task: $TASK"
+    if is_codex_only; then
+        log_info "   Codex-only mode: using Codex for analysis"
+    fi
     echo ""
 
     # =========================================================================
@@ -6616,7 +6890,9 @@ cmd_orch() {
     log_info "[1/12] CLARIFY - Generating clarification questions"
     cmd_clarify "$TASK"
     echo ""
-    log_warn "   For interactive mode, use: claude then /orchestrator"
+    if ! is_codex_only; then
+        log_warn "   For interactive mode, use: claude then /orchestrator"
+    fi
     read -p "Press Enter after reviewing questions (or Ctrl+C to abort)..."
 
     # =========================================================================
@@ -6626,7 +6902,26 @@ cmd_orch() {
     echo "   Analyzing for missing requirements, edge cases, integration points..."
 
     local GAP_OUTPUT
-    GAP_OUTPUT=$(claude --print -p "You are the Gap-Analyst agent. Analyze this task for gaps:
+    if is_codex_only; then
+        GAP_OUTPUT=$(codex exec --profile code-review "$(cat <<PROMPT_EOF
+You are the Gap-Analyst agent. Analyze this task for gaps:
+
+Task: ${SAFE_TASK}
+
+Find:
+1. Missing user flows (happy path, alternatives)
+2. Edge cases (empty, boundary, concurrent)
+3. Error scenarios and recovery
+4. Integration points
+
+Output: Priority questions and assumptions.
+PROMPT_EOF
+)" 2>&1) || {
+            log_warn "Gap-Analyst command failed, continuing with default analysis"
+            GAP_OUTPUT="[Gap-Analyst unavailable - proceeding with standard implementation]"
+        }
+    else
+        GAP_OUTPUT=$(claude --print -p "You are the Gap-Analyst agent. Analyze this task for gaps:
 
 Task: ${SAFE_TASK}
 
@@ -6637,9 +6932,10 @@ Find:
 4. Integration points
 
 Output: Priority questions and assumptions." 2>&1) || {
-        log_warn "Gap-Analyst command failed, continuing with default analysis"
-        GAP_OUTPUT="[Gap-Analyst unavailable - proceeding with standard implementation]"
-    }
+            log_warn "Gap-Analyst command failed, continuing with default analysis"
+            GAP_OUTPUT="[Gap-Analyst unavailable - proceeding with standard implementation]"
+        }
+    fi
 
     # Validate output
     if [[ -z "$GAP_OUTPUT" || ${#GAP_OUTPUT} -lt 20 ]]; then
@@ -6657,16 +6953,33 @@ Output: Priority questions and assumptions." 2>&1) || {
     log_info "[2/12] CLASSIFY - Complexity 1-10, model routing"
 
     local CLASSIFICATION
-    CLASSIFICATION=$(claude --print -p "Classify complexity (1-10) for: ${SAFE_TASK}
+    if is_codex_only; then
+        CLASSIFICATION=$(codex exec --profile code-review "$(cat <<PROMPT_EOF
+Classify complexity (1-10) for: ${SAFE_TASK}
+
+Output JSON only:
+{"complexity": N, "model": "codex", "adversarial": false}
+PROMPT_EOF
+)" 2>&1)
+    else
+        CLASSIFICATION=$(claude --print -p "Classify complexity (1-10) for: ${SAFE_TASK}
 
 Output JSON only:
 {\"complexity\": N, \"model\": \"opus|sonnet|minimax\", \"adversarial\": true|false}")
+    fi
 
     # Extract values
-    COMPLEXITY=$(echo "$CLASSIFICATION" | grep -oE '"complexity":\s*[0-9]+' | grep -oE '[0-9]+' || echo "5")
-    MODEL=$(echo "$CLASSIFICATION" | grep -oE '"model":\s*"[a-z]+"' | grep -oE '(opus|sonnet|minimax)' || echo "sonnet")
+    COMPLEXITY=$(echo "$CLASSIFICATION" | grep -oE '"complexity":\s*[0-9]+' | grep -oE '[0-9]+' || echo "$COMPLEXITY")
+    MODEL=$(echo "$CLASSIFICATION" | grep -oE '"model":\s*"[a-z]+"' | grep -oE '(opus|sonnet|minimax|codex)' || echo "$MODEL")
     local ADVERSARIAL
     ADVERSARIAL=$(echo "$CLASSIFICATION" | grep -oE '"adversarial":\s*(true|false)' | grep -oE '(true|false)' || echo "false")
+
+    if is_codex_only; then
+        MODEL="codex"
+        if [[ -z "$ADVERSARIAL" ]]; then
+            ADVERSARIAL="false"
+        fi
+    fi
 
     echo "   Complexity: $COMPLEXITY/10"
     echo "   Model: $MODEL"
@@ -6702,7 +7015,35 @@ Output JSON only:
     echo "   Generating plan..."
 
     local PLAN_CONTENT
-    PLAN_CONTENT=$(claude --print -p "Create implementation plan for: ${SAFE_TASK}
+    if is_codex_only; then
+        PLAN_CONTENT=$(codex exec --profile code-review "$(cat <<PROMPT_EOF
+Create implementation plan for: ${SAFE_TASK}
+
+Complexity: $COMPLEXITY
+Model: $MODEL
+
+Output structure:
+## Summary
+[1 paragraph]
+
+## Phases
+### Phase 1: [name]
+- Files: [list]
+- Changes: [description]
+
+### Phase 2: [name]
+...
+
+## Files to Modify/Create
+| File | Action | Description |
+
+## Testing Strategy
+
+## Risks
+PROMPT_EOF
+)" 2>&1) || PLAN_CONTENT="[Plan generation unavailable]"
+    else
+        PLAN_CONTENT=$(claude --print -p "Create implementation plan for: ${SAFE_TASK}
 
 Complexity: $COMPLEXITY
 Model: $MODEL
@@ -6725,6 +7066,7 @@ Output structure:
 ## Testing Strategy
 
 ## Risks")
+    fi
 
     echo "$PLAN_CONTENT"
     echo ""
@@ -6765,6 +7107,10 @@ EOF
     # =========================================================================
     log_info "[3c/12] PLAN-STATE - Initializing plan-state.json"
 
+    if is_codex_only; then
+        log_info "   Codex-only mode: plan-state hooks may be unavailable"
+    fi
+
     # The auto-plan-state.sh hook should trigger, but we also call manually as backup
     local PLAN_INIT="${HOME}/.claude/hooks/plan-state-init.sh"
     if [[ -x "$PLAN_INIT" ]]; then
@@ -6784,8 +7130,13 @@ EOF
     # =========================================================================
     # Step 4: PLAN MODE
     # =========================================================================
-    log_info "[4/12] PLAN MODE - In Claude Code, this enters EnterPlanMode"
-    log_info "   The analysis file will be read automatically by Claude Code"
+    if is_codex_only; then
+        log_info "[4/12] PLAN MODE - Manual plan review"
+        log_info "   Review .claude/orchestrator-analysis.md and proceed"
+    else
+        log_info "[4/12] PLAN MODE - In Claude Code, this enters EnterPlanMode"
+        log_info "   The analysis file will be read automatically by Claude Code"
+    fi
     echo ""
     read -p "Press Enter to proceed with execution..."
 
@@ -6829,7 +7180,11 @@ EOF
 
     # 7a. Quality Auditor
     log_info "   [7a] Quality Auditor..."
-    claude --print -p "Quick pragmatic audit of recent changes. Check: correctness, security, simplicity. Output: ✓ Ship | ⚠ Fix First | ✗ Rework" 2>/dev/null || true
+    if is_codex_only; then
+        codex exec --profile code-review "Quick pragmatic audit of recent changes. Check: correctness, security, simplicity. Output: ✓ Ship | ⚠ Fix First | ✗ Rework" 2>/dev/null || true
+    else
+        claude --print -p "Quick pragmatic audit of recent changes. Check: correctness, security, simplicity. Output: ✓ Ship | ⚠ Fix First | ✗ Rework" 2>/dev/null || true
+    fi
 
     # 7b. Gates
     log_info "   [7b] Quality Gates (9 languages)..."
@@ -6837,14 +7192,22 @@ EOF
 
     # 7c. Adversarial Spec (if complexity >= 7)
     if [[ "$COMPLEXITY" -ge 7 ]]; then
-        log_info "   [7c] Adversarial Spec Refinement..."
-        cmd_adversarial "$TASK" 2>/dev/null || true
+        if is_codex_only; then
+            log_warn "   [7c] Adversarial Spec Refinement skipped (codex-only mode)"
+        else
+            log_info "   [7c] Adversarial Spec Refinement..."
+            cmd_adversarial "$TASK" 2>/dev/null || true
+        fi
     fi
 
     # 7d. Adversarial Plan Validation
     if [[ "$ADVERSARIAL" == "true" ]] || [[ "$COMPLEXITY" -ge 8 ]]; then
-        log_info "   [7d] Adversarial Plan Validation (Claude + Codex)..."
-        cmd_adversarial_plan 2>/dev/null || log_warn "   Adversarial plan validation skipped (codex not available)"
+        if is_codex_only; then
+            log_warn "   [7d] Adversarial Plan Validation skipped (codex-only mode)"
+        else
+            log_info "   [7d] Adversarial Plan Validation (Claude + Codex)..."
+            cmd_adversarial_plan 2>/dev/null || log_warn "   Adversarial plan validation skipped (codex not available)"
+        fi
     fi
     echo ""
 
@@ -6902,6 +7265,11 @@ cmd_sentry_init() {
 
     log_info "Sentry Auto-Setup (v2.33)"
     log_info "Mode: $setup_mode"
+
+    if is_codex_only; then
+        log_warn "Codex-only mode: sentry-init requires Claude skills; disabled."
+        return 1
+    fi
 
     # Detect project type
     local project_type="unknown"
@@ -7017,6 +7385,11 @@ cmd_code_review_sentry() {
     validate_path "$branch" "nocheck"
 
     log_info "Sentry-Enhanced Code Review for branch: $branch"
+
+    if is_codex_only; then
+        log_warn "Codex-only mode: sentry code review requires Claude skills; disabled."
+        return 1
+    fi
 
     # Create PR if it doesn't exist
     local pr_number
